@@ -38,8 +38,6 @@
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
-#include "nrth_fonts.h"
-#include "nrth_logo.h"
 #endif
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -2268,35 +2266,7 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;
     NrthUI_ApplyTheme();
-
-    /* Load embedded DARKANARCHY fonts (nrth_fonts.h):
-     *  - English: ChakraPetch-SemiBold.ttf
-     *  - Arabic : IBMPlexSansArabic-SemiBold.ttf with full Presentation Forms-B */
-    {
-        static const ImWchar kEnRanges[] = { 0x0020, 0x00FF, 0 };
-        static const ImWchar kArRanges[] = {
-            0x0020, 0x00FF,   /* Latin basics + supplements for mixed labels */
-            0x0600, 0x06FF,   /* Arabic */
-            0x0750, 0x077F,   /* Arabic Supplement */
-            0x08A0, 0x08FF,   /* Arabic Extended-A */
-            0xFB50, 0xFDFF,   /* Arabic Presentation Forms-A (ligatures) */
-            0xFE70, 0xFEFF,   /* Arabic Presentation Forms-B */
-            0,
-        };
-        ImFontConfig fcEn;
-        ImFontConfig fcAr;
-        fcEn.FontDataOwnedByAtlas = false;
-        fcAr.FontDataOwnedByAtlas = false;
-        fcEn.OversampleH = 2; fcEn.OversampleV = 1;
-        fcAr.OversampleH = 2; fcAr.OversampleV = 1;
-        ImFont *pFontEn = io.Fonts->AddFontFromMemoryTTF(
-            (void *)kFontEnglishTTF, (int)sizeof(kFontEnglishTTF), 17.0f, &fcEn, kEnRanges);
-        ImFont *pFontAr = io.Fonts->AddFontFromMemoryTTF(
-            (void *)kFontArabicTTF, (int)sizeof(kFontArabicTTF), 17.0f, &fcAr, kArRanges);
-        NrthUI_SetFonts(pFontEn, pFontAr);
-        io.FontDefault = pFontEn ? pFontEn : io.Fonts->Fonts[0];
-    }
-
+    NrthUI_InitFonts();
     if (!ImGui_ImplWin32_Init(g_hGameWnd)) {
         return;
     }
@@ -2304,35 +2274,7 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
         ImGui_ImplWin32_Shutdown();
         return;
     }
-
-    /* DARKANARCHY logo texture from embedded RGBA pixels (nrth_logo.h).
-     * D3DFMT_A8R8G8B8 = BGRA byte order; D3DPOOL_MANAGED survives device reset.
-     * One reference is handed to the UI (NrthUI_SetLogoTexture). */
-    {
-        IDirect3DTexture9 *pLogoTex = NULL;
-        if (SUCCEEDED(pDevice->CreateTexture(kLogoWidth, kLogoHeight, 1, 0,
-                                             D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
-                                             &pLogoTex, NULL))) {
-            D3DLOCKED_RECT lr;
-            if (SUCCEEDED(pLogoTex->LockRect(0, &lr, NULL, 0))) {
-                const uint8_t *src = kLogoPixelsRGBA;
-                for (int y = 0; y < kLogoHeight; ++y) {
-                    uint8_t *row = (uint8_t *)lr.pBits + (size_t)y * (size_t)lr.Pitch;
-                    for (int x = 0; x < kLogoWidth; ++x, src += 4) {
-                        row[x * 4 + 0] = src[2]; /* B */
-                        row[x * 4 + 1] = src[1]; /* G */
-                        row[x * 4 + 2] = src[0]; /* R */
-                        row[x * 4 + 3] = src[3]; /* A */
-                    }
-                }
-                pLogoTex->UnlockRect(0);
-                NrthUI_SetLogoTexture(pLogoTex);
-            } else {
-                pLogoTex->Release();
-            }
-        }
-        /* on failure the header silently falls back to the vector logo */
-    }
+    NrthUI_InitTextures(pDevice);
 
     /* Subclass game window with SetWindowLongW (matches 0x100154df in NRTH.dll) */
     g_pOrigWndProc = (WNDPROC)SetWindowLongW(g_hGameWnd, GWL_WNDPROC, (LONG)GameWndProc);
@@ -2416,11 +2358,13 @@ static HRESULT WINAPI Hooked_Present(IDirect3DDevice9 *pDevice, const RECT *pSrc
 static HRESULT WINAPI Hooked_Reset(IDirect3DDevice9 *pDevice, D3DPRESENT_PARAMETERS *pParams)
 {
     if (g_bOverlayInit) {
+        NrthUI_ReleaseTextures();
         ImGui_ImplDX9_InvalidateDeviceObjects();
     }
     HRESULT hr = g_pOrigReset(pDevice, pParams);
     if (SUCCEEDED(hr) && g_bOverlayInit) {
         ImGui_ImplDX9_CreateDeviceObjects();
+        NrthUI_InitTextures(pDevice);
     }
     return hr;
 }

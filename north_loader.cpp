@@ -479,7 +479,7 @@ bool InjectHook(DWORD pid, const char* dllPath) {
 }
 
 int main(int argc, char* argv[]) {
-    SetConsoleTitleA("NORTH Loader");
+    SetConsoleTitleA("DARKANARCHY Loader | Developed by XRAOUF");
 
     const char* app = "gta_sa.exe";
     char dllPath[MAX_PATH];
@@ -510,15 +510,24 @@ int main(int argc, char* argv[]) {
 
         char base[MAX_PATH];
         base[0] = '\0';
-        if (dirLen > 0 && dirLen < MAX_PATH - 14) {
+        if (dirLen > 0 && dirLen < MAX_PATH - 24) {
             memcpy(base, self, dirLen);
             base[dirLen] = '\0';
-            strcat_s(base, sizeof(base), "\\NRTH.dll");
-            strcpy_s(dllPath, sizeof(dllPath), base);
+            strcat_s(base, sizeof(base), "\\DARKANARCHY.dll");
+            if (FileExists(base)) {
+                strcpy_s(dllPath, sizeof(dllPath), base);
+            } else {
+                memcpy(base, self, dirLen);
+                base[dirLen] = '\0';
+                strcat_s(base, sizeof(base), "\\NRTH.dll");
+                strcpy_s(dllPath, sizeof(dllPath), base);
+            }
         }
     }
 
-    printf("=== NORTH Loader ===\n");
+    printf("==================================================\n");
+    printf("   DARKANARCHY LOADER  |  DEVELOPED BY XRAOUF     \n");
+    printf("==================================================\n");
     printf("DLL : %s\n", dllPath[0] ? dllPath : "(no encontrado)");
     printf("APP : %s\n", app);
 

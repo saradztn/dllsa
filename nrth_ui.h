@@ -3,9 +3,12 @@
  * ============================================================================
  * nrth_ui.h — DARKANARCHY (by XRAOUF) Overlay UI & MTA Packet / Feature Sync
  * ============================================================================
- * Bilingual UI (Arabic العربية + English) with embedded TrueType fonts:
- *   - English TTF : ChakraPetch-SemiBold.ttf
- *   - Arabic TTF  : IBMPlexSansArabic-SemiBold.ttf (with contextual shaper & BiDi)
+ * Features:
+ *   - Bilingual UI: Arabic (العربية with contextual shaping & RTL BiDi) + English
+ *   - Custom TTF Fonts: DarkAnarchy-English.ttf + DarkAnarchy-Arabic.ttf
+ *   - AI-Generated Logo & Background D3D9 textures ("DARKANARCHY BY XRAOUF")
+ *   - Multi-theme custom glassmorphic cyber-anarchy design
+ *   - Full MTA PACKET_ID_* catalogue, SPlayerHealthSync, SWeaponAimSync & Lua VM bridge
  * ============================================================================
  */
 #include <stdint.h>
@@ -23,25 +26,11 @@ extern "C" {
 #endif
 
 void NrthUI_ApplyTheme(void);
+void NrthUI_InitFonts(void);
+void NrthUI_InitTextures(void *pD3DDevice9);
+void NrthUI_ReleaseTextures(void);
 void NrthUI_Build(void);
 void NrthUI_RenderFrame(bool menuOpen);
-
-/* Bilingual & Arabic contextual shaping API */
-void        NrthUI_SetLanguageArabic(bool isArabic);
-bool        NrthUI_IsLanguageArabic(void);
-const char *NrthUI_ShapeArabicText(const char *utf8In, char *outBuf, size_t outCap);
-void        NrthUI_SetFonts(void *pEnglishFont, void *pArabicFont);
-
-/* DARKANARCHY logo texture (optional; takes exactly one reference).
- * When set, the header renders the embedded PNG-based logo; when NULL,
- * it falls back to the code-drawn vector anarchy logo. */
-void NrthUI_SetLogoTexture(void *pD3D9Texture);
-bool NrthUI_HasLogoTexture(void);
-
-/* Arabic presentation-form shaper & simplified UAX#9 BiDi reorder
- * (exposed for verification tests; both are pure functions) */
-size_t NrthShape_ArabicCodepoints(const uint32_t *in, size_t n, uint32_t *out, size_t outCap);
-size_t NrthBidi_ReorderVisual(const uint32_t *in, size_t n, uint32_t *out, size_t outCap);
 
 const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);
