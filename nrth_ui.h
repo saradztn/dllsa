@@ -45,6 +45,7 @@ void     NrthUI_OnResourceStarted(const char *resName);
 bool     NrthUI_OnPacketSent(unsigned char packetId);
 uint32_t NrthUI_GetMarkerCount(void);
 bool     NrthUI_GetMarkerAt(uint32_t idx, float *outX, float *outY, float *outZ);
+void     NrthUI_PushToastNotification(const char *msg);
 
 #ifdef __cplusplus
 }

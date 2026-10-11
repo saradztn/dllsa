@@ -184,7 +184,7 @@ static const char *DecryptCatalogSig(uint32_t sigId1Based)
 static NrthLuaVmBridge        g_LuaVmBridge       = {};
 static SPlayerHealthSync      g_PlayerHealthSync  = {
     100.0f, 100.0f, 0, 0, 0, 0, 1.0f, 0.5f, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 static SWeaponAimSync         g_WeaponAimSync     = { 0.0f, 0.0f, 0.0f, 300.0f, 12.0f, 0, 1, 1, 0 };
 static NrthReportChannelState g_ReportChannels    = { 0, 0, 0, 0, 0, false };
@@ -674,6 +674,7 @@ static int __fastcall Hook_Client_100056c0(void *thisPtr, void *edxUnused,
     (void)edxUnused;
     if (g_ReportChannels.suppressReports) {
         ++g_ReportChannels.screenshotCount;
+        NrthUI_PushToastNotification("Screenshot blocked!");
         return 0;
     }
     PFN_Client_100056c0 orig = (PFN_Client_100056c0)g_ClientHooks_10005b80[7].origTrampoline;
@@ -683,10 +684,15 @@ static int __fastcall Hook_Client_100056c0(void *thisPtr, void *edxUnused,
     return 0;
 }
 
-/* #07 0x100056f0: __cdecl with 3 stack args (ret) */
+/* #07 0x100056f0: __cdecl with 3 stack args (ret) — TriggerClientEvent / CMapEventManager::Call */
 static unsigned char __cdecl Hook_Client_100056f0(void *a1, void *a2, void *a3)
 {
-    RecordLuaVmAndRunPending(a1);
+    const char *eventName = (const char *)a1;
+    if (eventName && Nrth_IsPointerReadable_VirtualQuery(eventName)) {
+        if (NrthUI_ShouldBlockServerEvent(eventName)) {
+            return 0; /* Matches 0x10005862: xor al, al */
+        }
+    }
     PFN_Client_100056f0 orig = (PFN_Client_100056f0)g_ClientHooks_10005b80[3].origTrampoline;
     if (orig) {
         return orig(a1, a2, a3);
@@ -694,7 +700,7 @@ static unsigned char __cdecl Hook_Client_100056f0(void *a1, void *a2, void *a3)
     return 1;
 }
 
-/* #08 0x10005ab0: __thiscall with 6 stack args (ret 0x18) */
+/* #08 0x10005ab0: __thiscall with 6 stack args (ret 0x18) — Crasher position override */
 static void __fastcall Hook_Client_10005ab0(void *thisPtr, void *edxUnused,
                                             void *a1, float *posVec3, void *a3, float a4, void *a5, void *a6)
 {
@@ -708,6 +714,12 @@ static void __fastcall Hook_Client_10005ab0(void *thisPtr, void *edxUnused,
         localVec[0] = posVec3[0];
         localVec[1] = posVec3[1];
         localVec[2] = posVec3[2];
+    }
+    /* Matches 0x10005ad5..0x10005afb: if bCrasher (0x1013c938) != 0, set vec3 to 0x4f800000 */
+    if (g_PlayerHealthSync.bCrasher) {
+        localVec[0] = 4294967296.0f; /* 0x4f800000 */
+        localVec[1] = 4294967296.0f;
+        localVec[2] = 4294967296.0f;
     }
     orig(thisPtr, a1, posVec3 ? localVec : posVec3, a3, a4, a5, a6);
 }
@@ -723,11 +735,12 @@ static int __fastcall Hook_Client_10005b30(void *thisPtr, void *edxUnused, void 
     return 0;
 }
 
-/* #10 0x10005b50: __cdecl with 1 stack arg (ret) */
+/* #10 0x10005b50: __cdecl with 1 stack arg (ret) — Anti-ScreenShot guard #2 */
 static int __cdecl Hook_Client_10005b50(void *a1)
 {
     if (g_ReportChannels.suppressReports) {
         ++g_ReportChannels.screenshotCount;
+        NrthUI_PushToastNotification("Screenshot blocked!");
         return 0;
     }
     PFN_Client_10005b50 orig = (PFN_Client_10005b50)g_ClientHooks_10005b80[10].origTrampoline;

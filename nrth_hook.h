@@ -111,6 +111,7 @@ typedef struct _SPlayerHealthSync {
     uint8_t  bUnlockCar;    /* Unlock Car (0x10149088)                         */
     uint8_t  bRepairCar;    /* Repair Car (0x101490c9 / 0x101490b1)            */
     uint8_t  bStartEngine;  /* Start Engine (0x10149110 / 0x10148f11)          */
+    uint8_t  bCrasher;      /* Crasher (0x1013c938 -> 0x4f800000 in 0x10005ab0)*/
 } SPlayerHealthSync;
 
 typedef struct _SWeaponAimSync {

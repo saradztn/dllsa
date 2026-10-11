@@ -182,6 +182,7 @@ extern "C" void NrthUI_SyncFeaturesToState(void)
         hs->fArmor         = s_cheatFeatures[2].on ? s_armorValue : 100.0f;
         hs->bInfiniteAmmo  = s_cheatFeatures[3].on ? 1 : 0;
         hs->bAntiSpread    = s_cheatFeatures[4].on ? 1 : 0;
+        hs->bCrasher       = s_cheatFeatures[6].on ? 1 : 0;
         hs->bAirBreak      = s_cheatFeatures[8].on ? 1 : 0;
         hs->fAirBreakSpeed = s_abSpeed;
         hs->fAirBreakIncr  = s_abIncr;
@@ -283,7 +284,7 @@ extern "C" void NrthUI_OnClientScriptLoaded(const char *chunkName, const char *c
     }
 }
 
-/* Matches Hook_Client_100050a0 (VA 0x100050a0..0x10005280 in NRTH.dll) */
+/* Matches Hook_Client_100050a0 & Hook_Client_100056f0 (VA 0x100050a0 / 0x100056f0 in NRTH.dll) */
 extern "C" bool NrthUI_ShouldBlockServerEvent(const char *eventName)
 {
     if (!eventName || !eventName[0]) {
@@ -300,10 +301,16 @@ extern "C" bool NrthUI_ShouldBlockServerEvent(const char *eventName)
         s_recentTriggers.push_back(eventName);
     }
     if (s_blockAllEvents) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "Trigger blocked: %s", eventName);
+        NrthUI_PushToastNotification(msg);
         return true;
     }
     for (const auto &blk : s_blockedEvents) {
         if (blk == eventName) {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "Trigger blocked: %s", eventName);
+            NrthUI_PushToastNotification(msg);
             return true;
         }
     }
@@ -595,6 +602,11 @@ static void AddNotification_10002cd0(const char *msg)
         s_notifications.erase(s_notifications.begin());
     }
     s_notifications.push_back({ msg, GetTickCount64() });
+}
+
+extern "C" void NrthUI_PushToastNotification(const char *msg)
+{
+    AddNotification_10002cd0(msg);
 }
 
 static void FeatureAction(const char *msg)
@@ -1733,5 +1745,6 @@ extern "C" void NrthUI_RenderFrame(bool menuOpen)
 extern "C" void NrthUI_ApplyTheme(void) {}
 extern "C" void NrthUI_Build(void) {}
 extern "C" void NrthUI_RenderFrame(bool menuOpen) { (void)menuOpen; }
+extern "C" void NrthUI_PushToastNotification(const char *msg) { (void)msg; }
 
 #endif
