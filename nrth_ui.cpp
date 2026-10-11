@@ -218,6 +218,148 @@ extern "C" void NrthUI_SyncFeaturesToState(void)
 }
 
 /* ===========================================================================
+ * Shared live hook state (Resources, Events, Packets, Dumper, Markers)
+ * =========================================================================== */
+struct DumperFileEntry {
+    std::string name;
+    std::string code;
+};
+struct PacketRow { std::string name; int id; bool blocked; std::string time; };
+struct MarkerRow { std::string name; float x, y, z; };
+
+static std::vector<std::string>     s_resources;
+static std::vector<std::string>     s_blockedEvents;
+static std::vector<std::string>     s_recentTriggers;
+static bool                         s_blockAllEvents = false;
+static std::vector<PacketRow>       s_packets;
+static bool                         s_packetsPopulated = false;
+static std::vector<DumperFileEntry> s_dumperEntries;
+static std::vector<MarkerRow>       s_markers;
+static std::string                  s_status = "No connected server.";
+
+static void EnsurePacketsPopulated()
+{
+    if (s_packetsPopulated) return;
+    uint32_t count = 0;
+    const NrthPacketDef *defs = NrthUI_GetPacketCatalog(&count);
+    for (uint32_t i = 0; i < count; ++i) {
+        s_packets.push_back({defs[i].name, defs[i].id, defs[i].isReportChannel, "00:00:00"});
+    }
+    s_packetsPopulated = true;
+}
+
+/* Matches RecordCapturedScript (VA 0x10004220..0x10004473 in NRTH.dll) */
+extern "C" void NrthUI_OnClientScriptLoaded(const char *chunkName, const char *code, size_t len)
+{
+    if (!chunkName || !chunkName[0] || !code || len == 0) {
+        return;
+    }
+    /* Skip chunk names starting with '&', "--", or containing "custom" (0x100042a3..0x10004318) */
+    if (chunkName[0] == '&' ||
+        (chunkName[0] == '-' && chunkName[1] == '-') ||
+        strstr(chunkName, "custom") != nullptr) {
+        return;
+    }
+    s_status = "Server connected.";
+
+    /* Extract resource prefix from "@:resName/..." or "resName\..." */
+    const char *p = chunkName;
+    while (*p == '@' || *p == ':' || *p == '\\' || *p == '/') ++p;
+    const char *sep = p;
+    while (*sep && *sep != '\\' && *sep != '/') ++sep;
+    if (*sep && sep > p && (size_t)(sep - p) < 64) {
+        std::string resName(p, (size_t)(sep - p));
+        NrthUI_OnResourceStarted(resName.c_str());
+    }
+
+    for (auto &entry : s_dumperEntries) {
+        if (entry.name == chunkName) {
+            entry.code.assign(code, len);
+            return;
+        }
+    }
+    if (s_dumperEntries.size() < 512) {
+        s_dumperEntries.push_back({ chunkName, std::string(code, len) });
+    }
+}
+
+/* Matches Hook_Client_100050a0 (VA 0x100050a0..0x10005280 in NRTH.dll) */
+extern "C" bool NrthUI_ShouldBlockServerEvent(const char *eventName)
+{
+    if (!eventName || !eventName[0]) {
+        return false;
+    }
+    bool seen = false;
+    for (const auto &ev : s_recentTriggers) {
+        if (ev == eventName) {
+            seen = true;
+            break;
+        }
+    }
+    if (!seen && s_recentTriggers.size() < 256) {
+        s_recentTriggers.push_back(eventName);
+    }
+    if (s_blockAllEvents) {
+        return true;
+    }
+    for (const auto &blk : s_blockedEvents) {
+        if (blk == eventName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Matches Hook_Client_100052b0 (VA 0x100052b0..0x10005494 in NRTH.dll) */
+extern "C" void NrthUI_OnResourceStarted(const char *resName)
+{
+    if (!resName || !resName[0]) {
+        return;
+    }
+    s_status = "Server connected.";
+    for (const auto &r : s_resources) {
+        if (r == resName) {
+            return;
+        }
+    }
+    if (s_resources.size() < 256) {
+        s_resources.push_back(resName);
+    }
+}
+
+/* Matches Hook_Netc_SendPacket_1001da80 packet table lookup */
+extern "C" bool NrthUI_OnPacketSent(unsigned char packetId)
+{
+    EnsurePacketsPopulated();
+    bool blocked = false;
+    for (auto &p : s_packets) {
+        if (p.id == (int)packetId) {
+            p.time = "live";
+            if (p.blocked) {
+                blocked = true;
+            }
+        }
+    }
+    return blocked;
+}
+
+extern "C" uint32_t NrthUI_GetMarkerCount(void)
+{
+    return (uint32_t)s_markers.size();
+}
+
+extern "C" bool NrthUI_GetMarkerAt(uint32_t idx, float *outX, float *outY, float *outZ)
+{
+    if (idx >= s_markers.size()) {
+        return false;
+    }
+    if (outX) *outX = s_markers[idx].x;
+    if (outY) *outY = s_markers[idx].y;
+    if (outZ) *outZ = s_markers[idx].z;
+    return true;
+}
+
+/* ===========================================================================
  * Lua VM Bridge execution (0x1013bf04 registry stride 0x1C, L at +0x18,
  * default_L 0x1013c95c, loadbuffer 0x1013c94c with "@custom", pcall 0x1013c974,
  * flag 0x1013c939, script buffer 0x1013beec, VirtualQuery guard)
@@ -247,7 +389,14 @@ extern "C" bool NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmM
     void *targetL = NULL;
     if (vmMode == 0 && bridge->default_L_1013c95c) {
         targetL = bridge->default_L_1013c95c;
-    } else if (bridge->slotCount > 0) {
+    } else if (vmMode > 0 && (uint32_t)(vmMode - 1) < bridge->slotCount &&
+               (uint32_t)(vmMode - 1) < NRTH_VM_REGISTRY_CAP) {
+        void *cand = (void *)(uintptr_t)bridge->registry_1013bf04[vmMode - 1].luaStatePtr32;
+        if (cand && Nrth_IsPointerReadable_VirtualQuery(cand)) {
+            targetL = cand;
+        }
+    }
+    if (!targetL && bridge->slotCount > 0) {
         for (uint32_t i = 0; i < bridge->slotCount && i < NRTH_VM_REGISTRY_CAP; ++i) {
             void *cand = (void *)(uintptr_t)bridge->registry_1013bf04[i].luaStatePtr32;
             if (cand && Nrth_IsPointerReadable_VirtualQuery(cand)) {
@@ -355,7 +504,6 @@ static bool s_menuOpen   = true;
 static char s_editorBuf[65536] = "-- North Cheat editor\n";
 static int  s_vmIndex     = 0;  /* "Default VM", "@custom" */
 
-static std::string s_status = "No connected server.";
 static std::string s_lastAction;
 
 struct ScriptItem { std::string name; bool autoInject; };
@@ -363,22 +511,14 @@ static std::vector<ScriptItem> s_scripts;
 static int  s_scriptSel = -1;
 static bool s_scriptsScanned = false;
 
-static std::vector<std::string> s_resources;
-static std::vector<std::string> s_blockedEvents;
-static std::vector<std::string> s_recentTriggers;
-struct PacketRow { std::string name; int id; bool blocked; std::string time; };
-static std::vector<PacketRow> s_packets;
-static bool s_packetsPopulated = false;
 static char s_packetSearch[64] = "";
 static int  s_packetSel = -1;
 
 struct PlayerRow { std::string name; bool isYou; };
 static std::vector<PlayerRow> s_players;
 static std::vector<std::string> s_friends;
-static std::string s_playerFilter;
+static char s_playerFilterBuf[64] = "";
 static int  s_playerSel = 0;
-struct MarkerRow { std::string name; float x, y, z; };
-static std::vector<MarkerRow> s_markers;
 static char s_markerName[64] = "";
 
 struct ConfigItem { std::string name; };
@@ -462,17 +602,6 @@ static void FeatureAction(const char *msg)
     s_lastAction = msg ? msg : "";
     NrthUI_SyncFeaturesToState();
     AddNotification_10002cd0(msg);
-}
-
-static void EnsurePacketsPopulated()
-{
-    if (s_packetsPopulated) return;
-    uint32_t count = 0;
-    const NrthPacketDef *defs = NrthUI_GetPacketCatalog(&count);
-    for (uint32_t i = 0; i < count; ++i) {
-        s_packets.push_back({defs[i].name, defs[i].id, defs[i].isReportChannel, "00:00:00"});
-    }
-    s_packetsPopulated = true;
 }
 
 static void ScanLuaScripts()
@@ -562,9 +691,34 @@ static void DrawEditor()
         }
     }
     ImGui::SameLine();
-    const char *vms[] = {"Default VM", customLabel};
-    ImGui::SetNextItemWidth(160);
-    ImGui::Combo("##vm_combo", &s_vmIndex, vms, 2);
+    NrthLuaVmBridge *bridge = Nrth_GetLuaVmBridge();
+    std::string vmPreview = "Default VM";
+    if (s_vmIndex > 0 && bridge && (uint32_t)(s_vmIndex - 1) < bridge->slotCount &&
+        (uint32_t)(s_vmIndex - 1) < NRTH_VM_REGISTRY_CAP) {
+        const char *nm = (const char *)bridge->registry_1013bf04[s_vmIndex - 1].resourceMeta;
+        char lbl[64];
+        snprintf(lbl, sizeof(lbl), "%s (0x%08X)", nm[0] ? nm : customLabel,
+                 bridge->registry_1013bf04[s_vmIndex - 1].luaStatePtr32);
+        vmPreview = lbl;
+    }
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::BeginCombo("##vm_combo", vmPreview.c_str())) {
+        if (ImGui::Selectable("Default VM", s_vmIndex == 0)) {
+            s_vmIndex = 0;
+        }
+        if (bridge) {
+            for (uint32_t i = 0; i < bridge->slotCount && i < NRTH_VM_REGISTRY_CAP; ++i) {
+                const char *nm = (const char *)bridge->registry_1013bf04[i].resourceMeta;
+                char lbl[64];
+                snprintf(lbl, sizeof(lbl), "%s (0x%08X)##vm_%u", nm[0] ? nm : customLabel,
+                         bridge->registry_1013bf04[i].luaStatePtr32, i);
+                if (ImGui::Selectable(lbl, s_vmIndex == (int)(i + 1))) {
+                    s_vmIndex = (int)(i + 1);
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
     ImGui::SameLine();
     if (ImGui::Button("Clear##console")) s_console.clear();
     ImGui::SameLine();
@@ -655,10 +809,11 @@ static void DrawResources()
             FindClose(h);
         }
     }
-    ImGui::TextDisabled("Source: .\\mods\\deathmatch\\resources / cache (disk)");
+    ImGui::TextDisabled("Source: live CResourceManager (0x100052b0) + disk cache");
     static char search[64] = "";
     ImGui::InputTextWithHint("##res_search", "Search...", search, sizeof(search));
     static int resSel = 0;
+    if (resSel >= (int)s_resources.size()) resSel = 0;
     std::string preview = s_resources.empty() ? "Select Resource" : s_resources[resSel];
     ImGui::SetNextItemWidth(260);
     if (ImGui::BeginCombo("##res_combo", preview.c_str())) {
@@ -671,9 +826,13 @@ static void DrawResources()
     ImGui::SameLine();
     ImGui::TextDisabled("(%d found)", (int)s_resources.size());
     if (ImGui::Button("Stop Resource")) {
-        if (!s_resources.empty()) {
+        if (!s_resources.empty() && resSel >= 0 && resSel < (int)s_resources.size()) {
+            std::string stoppedName = s_resources[resSel];
+            Nrth_StopClientResource_100054a0(stoppedName.c_str());
+            s_resources.erase(s_resources.begin() + resSel);
+            if (resSel >= (int)s_resources.size() && resSel > 0) --resSel;
             char msg[128];
-            snprintf(msg, sizeof(msg), "Resource stopped: %s", s_resources[resSel].c_str());
+            snprintf(msg, sizeof(msg), "Resource stopped: %s", stoppedName.c_str());
             FeatureAction(msg);
         }
     }
@@ -701,17 +860,29 @@ static void DrawEvents()
         FeatureAction(("Event unblocked: " + s_blockedEvents.back()).c_str());
         s_blockedEvents.pop_back();
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("Block All Events", &s_blockAllEvents);
     static char trig[96] = "";
     ImGui::InputTextWithHint("##trigger_input", "triggerServerEvent name...", trig, sizeof(trig));
     ImGui::SameLine();
     if (ImGui::Button("Add to Block List") && trig[0]) {
         s_blockedEvents.push_back(trig);
+        FeatureAction(("Event blocked: " + std::string(trig)).c_str());
         trig[0] = 0;
     }
     ImGui::Separator();
-    ImGui::Text("Recent Triggers:");
+    ImGui::Text("Recent Triggers (click Block to filter):");
     if (s_recentTriggers.empty()) ImGui::TextDisabled("No triggers");
-    for (auto &t : s_recentTriggers) ImGui::BulletText("%s", t.c_str());
+    for (int i = 0; i < (int)s_recentTriggers.size(); ++i) {
+        ImGui::PushID(i);
+        ImGui::BulletText("%s", s_recentTriggers[i].c_str());
+        ImGui::SameLine(280);
+        if (ImGui::SmallButton("Block")) {
+            s_blockedEvents.push_back(s_recentTriggers[i]);
+            FeatureAction(("Event blocked: " + s_recentTriggers[i]).c_str());
+        }
+        ImGui::PopID();
+    }
 }
 
 static void DrawEventsTable()
@@ -801,29 +972,107 @@ static void DrawPackets()
     ImGui::EndChild();
 }
 
+static bool SaveDumperEntryToDisk(const DumperFileEntry &entry)
+{
+    CreateDirectoryA("C:\\NVX", NULL);
+    CreateDirectoryA("C:\\NVX\\dump", NULL);
+    std::string safeName;
+    for (char ch : entry.name) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.') {
+            safeName.push_back(ch);
+        } else if (ch == '/' || ch == '\\' || ch == ':') {
+            safeName.push_back('_');
+        }
+    }
+    if (safeName.empty()) safeName = "script.lua";
+    if (safeName.find(".lua") == std::string::npos) safeName += ".lua";
+    std::string fullPath = "C:\\NVX\\dump\\" + safeName;
+    FILE *fp = fopen(fullPath.c_str(), "wb");
+    if (!fp) return false;
+    fwrite(entry.code.data(), 1, entry.code.size(), fp);
+    fclose(fp);
+    return true;
+}
+
 static void DrawDumper()
 {
-    ImGui::TextDisabled("Memory / class dumper (resolved offsets from 0x1000c390)");
-    ImGui::BeginChild("##dumper", ImVec2(-1, -1), true);
+    static int dumpSel = -1;
+    static char dumpFilter[64] = "";
+    ImGui::InputTextWithHint("##dump_filter", "Search captured scripts...", dumpFilter, sizeof(dumpFilter));
+    ImGui::SameLine();
+    if (ImGui::Button("Dump Selected") && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
+        if (SaveDumperEntryToDisk(s_dumperEntries[dumpSel])) {
+            FeatureAction(("Dump script saved: " + s_dumperEntries[dumpSel].name).c_str());
+        } else {
+            FeatureAction("Failed to save dump file");
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Dump All")) {
+        int saved = 0;
+        for (const auto &e : s_dumperEntries) {
+            if (SaveDumperEntryToDisk(e)) ++saved;
+        }
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Dump all scripts saved (%d)", saved);
+        FeatureAction(msg);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load in Editor") && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
+        const std::string &code = s_dumperEntries[dumpSel].code;
+        size_t copyLen = code.size() < (sizeof(s_editorBuf) - 1) ? code.size() : (sizeof(s_editorBuf) - 1);
+        memcpy(s_editorBuf, code.data(), copyLen);
+        s_editorBuf[copyLen] = '\0';
+        s_topTab = 0;
+        s_scriptsSub = 0;
+        FeatureAction("Loaded script into editor");
+    }
+
+    ImGui::BeginChild("##dumper_left", ImVec2(280, -1), true);
+    ImGui::Text("Captured Scripts (%zu)", s_dumperEntries.size());
+    ImGui::Separator();
+    for (int i = 0; i < (int)s_dumperEntries.size(); ++i) {
+        if (dumpFilter[0] && s_dumperEntries[i].name.find(dumpFilter) == std::string::npos) continue;
+        if (ImGui::Selectable(s_dumperEntries[i].name.c_str(), dumpSel == i)) {
+            dumpSel = i;
+        }
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Resolved Offsets (0x1000c390)");
     uint32_t count = 0;
     const uintptr_t *offsets = Nrth_GetClientResolvedOffsets(&count);
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t addr = offsets[i] ? (uint32_t)offsets[i] : (0x10000000u + i * 0x10u);
-        ImGui::Text("Address: 0x%08X", addr);
-        ImGui::SameLine(180);
-        ImGui::TextDisabled("slot #%02u (%s)", i + 1, offsets[i] ? "resolved" : "pending");
+        ImGui::Text("0x%08X (#%02u %s)", addr, i + 1, offsets[i] ? "ok" : "pend");
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##dumper_right", ImVec2(0, -1), true);
+    if (dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
+        const DumperFileEntry &e = s_dumperEntries[dumpSel];
+        ImGui::Text("Chunk: %s (%zu bytes)", e.name.c_str(), e.code.size());
+        ImGui::Separator();
+        if (e.code.size() > 65536) {
+            ImGui::TextDisabled("File big, no view script");
+        } else {
+            ImGui::TextUnformatted(e.code.c_str());
+        }
+    } else {
+        ImGui::TextDisabled("Select a captured script from the left panel to preview or dump to C:\\NVX\\dump\\");
     }
     ImGui::EndChild();
 }
 
 static void DrawPlayerTab()
 {
-    ImGui::InputTextWithHint("##player_filter", "filter...", (char *)s_playerFilter.c_str(), 64);
+    ImGui::InputTextWithHint("##player_filter", "filter...", s_playerFilterBuf, sizeof(s_playerFilterBuf));
     ImGui::SetNextItemWidth(280);
     std::string preview = s_players.empty() ? "Select player..." :
         (s_players[s_playerSel].name + (s_players[s_playerSel].isYou ? " (you)" : ""));
     if (ImGui::BeginCombo("##player_combo", preview.c_str())) {
         for (int i = 0; i < (int)s_players.size(); ++i) {
+            if (s_playerFilterBuf[0] && s_players[i].name.find(s_playerFilterBuf) == std::string::npos) continue;
             std::string lbl = s_players[i].name + (s_players[i].isYou ? " (you)" : "");
             if (ImGui::Selectable(lbl.c_str(), s_playerSel == i)) s_playerSel = i;
         }
@@ -997,19 +1246,37 @@ static void DrawMarkersTab()
     ImGui::InputTextWithHint("##marker_name", "marker name...", s_markerName, sizeof(s_markerName));
     ImGui::SameLine();
     if (ImGui::Button("Save") && s_markerName[0]) {
-        MarkerRow m = {s_markerName, 0.f, 0.f, 0.f};
+        float mx = 0.0f, my = 0.0f, mz = 0.0f;
+        Nrth_GetLocalPlayerPosition(&mx, &my, &mz);
+        MarkerRow m = {s_markerName, mx, my, mz};
         s_markers.push_back(m);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Marker saved: %s", s_markerName);
+        FeatureAction(msg);
         s_markerName[0] = 0;
     }
     if (s_markers.empty()) ImGui::TextDisabled("No markers saved");
-    for (auto &m : s_markers) {
+    for (int i = 0; i < (int)s_markers.size(); ++i) {
+        ImGui::PushID(i);
+        MarkerRow &m = s_markers[i];
         char line[128];
         snprintf(line, sizeof(line), "%s (%.1f, %.1f, %.1f)", m.name.c_str(), m.x, m.y, m.z);
         ImGui::BulletText("%s", line);
         ImGui::SameLine(280);
-        if (ImGui::SmallButton("Teleport")) FeatureAction("Teleport");
+        if (ImGui::SmallButton("Teleport")) {
+            if (Nrth_TeleportLocalPlayer(m.x, m.y, m.z)) {
+                FeatureAction(("Teleported to: " + m.name).c_str());
+            } else {
+                FeatureAction("Teleport");
+            }
+        }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Delete")) m.name.clear();
+        if (ImGui::SmallButton("Delete")) {
+            s_markers.erase(s_markers.begin() + i);
+            ImGui::PopID();
+            break;
+        }
+        ImGui::PopID();
     }
 }
 

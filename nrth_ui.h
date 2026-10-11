@@ -38,6 +38,14 @@ const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);
 bool                 NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmMode);
 
+/* ---- Live hook callbacks (0x100047b0, 0x100050a0, 0x100052b0, 0x1001da80) */
+void     NrthUI_OnClientScriptLoaded(const char *chunkName, const char *code, size_t len);
+bool     NrthUI_ShouldBlockServerEvent(const char *eventName);
+void     NrthUI_OnResourceStarted(const char *resName);
+bool     NrthUI_OnPacketSent(unsigned char packetId);
+uint32_t NrthUI_GetMarkerCount(void);
+bool     NrthUI_GetMarkerAt(uint32_t idx, float *outX, float *outY, float *outZ);
+
 #ifdef __cplusplus
 }
 #endif

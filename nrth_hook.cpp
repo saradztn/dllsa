@@ -353,11 +353,26 @@ static PFN_lua_createtable_t  g_lua_createtable_1013c9a0  = NULL;
 static PFN_lua_setfield_t     g_lua_setfield_1013c9a4     = NULL;
 static PFN_lua_settop_t       g_lua_settop_1013c9a8       = NULL;
 
+struct NrthActiveResourceSlot {
+    char  name[64];
+    void *resPtr;
+};
+static NrthActiveResourceSlot s_activeResources[128] = {};
+static uint32_t               s_activeResourceCount  = 0;
+static char                   s_stoppedResources[128][64] = {{0}};
+static uint32_t               s_stoppedResourceCount = 0;
+
 /* Custom Lua `api` closures registered by sub_10010ff0 (0x1000f920..0x100112a0) */
 static int NRTH_CDECL LuaApi_StoppedResources_1000f920(void *L)
 {
     if (g_lua_createtable_1013c9a0) {
-        g_lua_createtable_1013c9a0(L, 0, 0);
+        g_lua_createtable_1013c9a0(L, (int)s_stoppedResourceCount, 0);
+        if (g_lua_pushstring_1013c998 && g_lua_rawseti_1013c994) {
+            for (uint32_t i = 0; i < s_stoppedResourceCount; ++i) {
+                g_lua_pushstring_1013c998(L, s_stoppedResources[i]);
+                g_lua_rawseti_1013c994(L, -2, (int)(i + 1));
+            }
+        }
         return 1;
     }
     return 0;
@@ -375,7 +390,23 @@ static int NRTH_CDECL LuaApi_ShootBullet_1000fe90(void *L)
 static int NRTH_CDECL LuaApi_GetMarkersPos_10010cc0(void *L)
 {
     if (g_lua_createtable_1013c9a0) {
-        g_lua_createtable_1013c9a0(L, 0, 0);
+        uint32_t mCount = NrthUI_GetMarkerCount();
+        g_lua_createtable_1013c9a0(L, (int)mCount, 0);
+        if (g_lua_pushnumber_1013c97c && g_lua_rawseti_1013c994) {
+            for (uint32_t i = 0; i < mCount; ++i) {
+                float mx = 0.0f, my = 0.0f, mz = 0.0f;
+                if (NrthUI_GetMarkerAt(i, &mx, &my, &mz)) {
+                    g_lua_createtable_1013c9a0(L, 3, 0);
+                    g_lua_pushnumber_1013c97c(L, (double)mx);
+                    g_lua_rawseti_1013c994(L, -2, 1);
+                    g_lua_pushnumber_1013c97c(L, (double)my);
+                    g_lua_rawseti_1013c994(L, -2, 2);
+                    g_lua_pushnumber_1013c97c(L, (double)mz);
+                    g_lua_rawseti_1013c994(L, -2, 3);
+                    g_lua_rawseti_1013c994(L, -2, (int)(i + 1));
+                }
+            }
+        }
         return 1;
     }
     return 0;
@@ -437,6 +468,8 @@ static void RegisterLuaApi_10010ff0(void *L)
     (void)g_pClientGame_10148ee8;
     (void)g_ClientIfaces_10148ed4;
     (void)g_ResourceMgr_1013c948;
+    (void)s_activeResources;
+    (void)s_activeResourceCount;
     (void)&LuaApi_StoppedResources_1000f920;
     (void)&LuaApi_ShootBullet_1000fe90;
     (void)&LuaApi_GetMarkersPos_10010cc0;
@@ -445,7 +478,22 @@ static void RegisterLuaApi_10010ff0(void *L)
 #endif
 }
 
-static void RecordLuaVmAndRunPending(void *L)
+static void ExtractVmLabelFromChunkName(const char *chunkName, char *outBuf, size_t outCap)
+{
+    if (!outBuf || outCap == 0) return;
+    outBuf[0] = '\0';
+    if (!chunkName || !chunkName[0]) return;
+    const char *p = chunkName;
+    while (*p == '@' || *p == '=' || *p == ':' || *p == '\\' || *p == '/') ++p;
+    size_t n = 0;
+    while (p[n] && p[n] != '\\' && p[n] != '/' && p[n] != '.' && n + 1 < outCap) {
+        outBuf[n] = p[n];
+        ++n;
+    }
+    outBuf[n] = '\0';
+}
+
+static void RecordLuaVmAndRunPending(void *L, const char *chunkNameHint = NULL)
 {
     if (!L || !Nrth_IsPointerReadable_VirtualQuery(L)) {
         return;
@@ -454,6 +502,11 @@ static void RecordLuaVmAndRunPending(void *L)
     bool already = false;
     for (uint32_t i = 0; i < g_LuaVmBridge.slotCount && i < NRTH_VM_REGISTRY_CAP; ++i) {
         if (g_LuaVmBridge.registry_1013bf04[i].luaStatePtr32 == (uint32_t)(uintptr_t)L) {
+            if (chunkNameHint && !g_LuaVmBridge.registry_1013bf04[i].resourceMeta[0]) {
+                ExtractVmLabelFromChunkName(chunkNameHint,
+                                            (char *)g_LuaVmBridge.registry_1013bf04[i].resourceMeta,
+                                            sizeof(g_LuaVmBridge.registry_1013bf04[i].resourceMeta));
+            }
             already = true;
             break;
         }
@@ -461,6 +514,11 @@ static void RecordLuaVmAndRunPending(void *L)
     if (!already && g_LuaVmBridge.slotCount < NRTH_VM_REGISTRY_CAP) {
         uint32_t idx = g_LuaVmBridge.slotCount++;
         g_LuaVmBridge.registry_1013bf04[idx].luaStatePtr32 = (uint32_t)(uintptr_t)L;
+        if (chunkNameHint) {
+            ExtractVmLabelFromChunkName(chunkNameHint,
+                                        (char *)g_LuaVmBridge.registry_1013bf04[idx].resourceMeta,
+                                        sizeof(g_LuaVmBridge.registry_1013bf04[idx].resourceMeta));
+        }
         RegisterLuaApi_10010ff0(L);
     }
     if (g_LuaVmBridge.execFlag_1013c939 &&
@@ -518,7 +576,10 @@ static void __fastcall Hook_Client_10002ff0(void *thisPtr, void *edxUnused,
 /* #01 0x100047b0: __cdecl with 4 stack args (ret) — luaL_loadbuffer hook */
 static int __cdecl Hook_Client_100047b0(void *L, const char *buff, size_t sz, const char *name)
 {
-    RecordLuaVmAndRunPending(L);
+    RecordLuaVmAndRunPending(L, name);
+    if (name && buff && sz > 0 && sz < 0xA00000u) {
+        NrthUI_OnClientScriptLoaded(name, buff, sz);
+    }
     PFN_Client_100047b0 orig = (PFN_Client_100047b0)g_ClientHooks_10005b80[1].origTrampoline;
     if (orig) {
         if (!g_LuaVmBridge.loadbuffer_1013c94c) {
@@ -533,6 +594,11 @@ static int __cdecl Hook_Client_100047b0(void *L, const char *buff, size_t sz, co
 static unsigned char __cdecl Hook_Client_100050a0(void *a1, const char *eventName,
                                                   void *a3, void *a4, void *a5, void *a6, float a7)
 {
+    if (eventName && Nrth_IsPointerReadable_VirtualQuery(eventName)) {
+        if (NrthUI_ShouldBlockServerEvent(eventName)) {
+            return 0; /* Matches 0x10005220: xor al, al when event is blocked */
+        }
+    }
     PFN_Client_100050a0 orig = (PFN_Client_100050a0)g_ClientHooks_10005b80[2].origTrampoline;
     if (orig) {
         return orig(a1, eventName, a3, a4, a5, a6, a7);
@@ -561,10 +627,25 @@ static void *__fastcall Hook_Client_100052b0(void *thisPtr, void *edxUnused,
 {
     (void)edxUnused;
     PFN_Client_100052b0 orig = (PFN_Client_100052b0)g_ClientHooks_10005b80[5].origTrampoline;
-    if (orig) {
-        return orig(thisPtr, a1, resName, a3, a4, a5, a6, a7);
+    void *resPtr = orig ? orig(thisPtr, a1, resName, a3, a4, a5, a6, a7) : NULL;
+    if (resPtr && resName && Nrth_IsPointerReadable_VirtualQuery(resName) && resName[0]) {
+        bool exists = false;
+        for (uint32_t i = 0; i < s_activeResourceCount; ++i) {
+            if (strcmp(s_activeResources[i].name, resName) == 0) {
+                s_activeResources[i].resPtr = resPtr;
+                exists = true;
+                break;
+            }
+        }
+        if (!exists && s_activeResourceCount < 128) {
+            strncpy(s_activeResources[s_activeResourceCount].name, resName, 63);
+            s_activeResources[s_activeResourceCount].name[63] = '\0';
+            s_activeResources[s_activeResourceCount].resPtr   = resPtr;
+            ++s_activeResourceCount;
+        }
+        NrthUI_OnResourceStarted(resName);
     }
-    return NULL;
+    return resPtr;
 }
 
 /* #05 0x10005620: __thiscall with 1 stack arg (ret 0x4) */
@@ -574,6 +655,15 @@ static void __fastcall Hook_Client_10005620(void *thisPtr, void *edxUnused, void
     PFN_Client_10005620 orig = (PFN_Client_10005620)g_ClientHooks_10005b80[6].origTrampoline;
     if (orig) {
         orig(thisPtr, resPtr);
+    }
+    for (uint32_t i = 0; i < s_activeResourceCount; ++i) {
+        if (s_activeResources[i].resPtr == resPtr) {
+            for (uint32_t j = i; j + 1 < s_activeResourceCount; ++j) {
+                s_activeResources[j] = s_activeResources[j + 1];
+            }
+            --s_activeResourceCount;
+            break;
+        }
     }
 }
 
@@ -1294,6 +1384,105 @@ extern "C" bool Nrth_DestroyCurrentVehicle(void)
     return false;
 }
 
+extern "C" bool Nrth_GetLocalPlayerPosition(float *outX, float *outY, float *outZ)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pEntity = GetCurrentVehicle_00BA18FC();
+    if (!pEntity) {
+        pEntity = GetLocalPed_00B6F5F0();
+    }
+    if (!pEntity || !Nrth_IsPointerReadable_VirtualQuery((const void *)(pEntity + 0x14u))) {
+        return false;
+    }
+    uintptr_t pMatrix = *(const uintptr_t *)(pEntity + 0x14u);
+    if (!pMatrix || !Nrth_IsPointerReadable_VirtualQuery((const void *)(pMatrix + 0x30u))) {
+        return false;
+    }
+    const float *pPos = (const float *)(pMatrix + 0x30u);
+    if (outX) *outX = pPos[0];
+    if (outY) *outY = pPos[1];
+    if (outZ) *outZ = pPos[2];
+    return true;
+#else
+    (void)outX; (void)outY; (void)outZ;
+    return false;
+#endif
+}
+
+extern "C" bool Nrth_TeleportLocalPlayer(float x, float y, float z)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pEntity = GetCurrentVehicle_00BA18FC();
+    if (!pEntity) {
+        pEntity = GetLocalPed_00B6F5F0();
+    }
+    if (!pEntity || !Nrth_IsPointerReadable_VirtualQuery((const void *)(pEntity + 0x14u))) {
+        return false;
+    }
+    uintptr_t pMatrix = *(const uintptr_t *)(pEntity + 0x14u);
+    if (!pMatrix || !IsAddressWritable((const void *)(pMatrix + 0x30u), 12)) {
+        return false;
+    }
+    float *pPos = (float *)(pMatrix + 0x30u);
+    pPos[0] = x;
+    pPos[1] = y;
+    pPos[2] = z;
+    if (IsAddressWritable((void *)(pEntity + 0x44u), 28)) {
+        float *pMove = (float *)(pEntity + 0x44u);
+        pMove[0] = 0.0f;
+        pMove[1] = 0.0f;
+        pMove[2] = 0.0f;
+        float *pTurn = (float *)(pEntity + 0x54u);
+        pTurn[0] = 0.0f;
+        pTurn[1] = 0.0f;
+        pTurn[2] = 0.0f;
+    }
+    return true;
+#else
+    (void)x; (void)y; (void)z;
+    return false;
+#endif
+}
+
+/* Matches StopClientResource at VA 0x100054a0..0x10005618 in NRTH.dll:
+ * Finds resName in s_activeResources, calls g_ClientHooks_10005b80[6].origTrampoline(g_ResourceMgr_1013c948, resPtr),
+ * removes it from active resources, and records it in s_stoppedResources for api.StoppedResources(). */
+extern "C" bool Nrth_StopClientResource_100054a0(const char *resName)
+{
+    if (!resName || !resName[0]) {
+        return false;
+    }
+    bool recorded = false;
+    for (uint32_t i = 0; i < s_stoppedResourceCount; ++i) {
+        if (strcmp(s_stoppedResources[i], resName) == 0) {
+            recorded = true;
+            break;
+        }
+    }
+    if (!recorded && s_stoppedResourceCount < 128) {
+        strncpy(s_stoppedResources[s_stoppedResourceCount], resName, 63);
+        s_stoppedResources[s_stoppedResourceCount][63] = '\0';
+        ++s_stoppedResourceCount;
+    }
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    for (uint32_t i = 0; i < s_activeResourceCount; ++i) {
+        if (strcmp(s_activeResources[i].name, resName) == 0) {
+            void *resPtr = s_activeResources[i].resPtr;
+            PFN_Client_10005620 origRemove = (PFN_Client_10005620)g_ClientHooks_10005b80[6].origTrampoline;
+            if (origRemove && g_ResourceMgr_1013c948 && resPtr) {
+                origRemove(g_ResourceMgr_1013c948, resPtr);
+            }
+            for (uint32_t j = i; j + 1 < s_activeResourceCount; ++j) {
+                s_activeResources[j] = s_activeResources[j + 1];
+            }
+            --s_activeResourceCount;
+            return true;
+        }
+    }
+#endif
+    return true;
+}
+
 /* Matches per-frame game feature loop in Hooked_Present (VA 0x10015812..0x10015aa0) */
 extern "C" void Nrth_TickGameFeatures_10015812(void)
 {
@@ -1590,6 +1779,10 @@ static unsigned char __fastcall Hook_Netc_SendPacket_1001da80(
     if (g_ReportChannels.suppressReports &&
         (packetId == 80u || packetId == 81u || packetId == 82u || packetId == 83u)) {
         ++g_ReportChannels.diagnosticCount;
+        return 1;
+    }
+    /* Check UI packet log & per-packet block flag */
+    if (NrthUI_OnPacketSent(packetId)) {
         return 1;
     }
     if (g_pOrigNetcSendPacket) {

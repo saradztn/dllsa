@@ -357,6 +357,16 @@ int main(void)
               Nrth_GetPlayerHealthSync()->bFlyingCar == 0,
               "In-game feature tick (0x10015812) & GTA:SA/MTA action helpers (0x10001d80..0x1002f0f0) guarded safely");
 
+        /* Live hook callbacks (0x10004220, 0x100050a0, 0x100052b0, 0x100054a0, 0x1001da80) */
+        NrthUI_OnClientScriptLoaded("@:hud/client.lua", "outputChatBox('hi')", 19);
+        NrthUI_OnResourceStarted("hud");
+        bool stopResOk = Nrth_StopClientResource_100054a0("hud");
+        bool evNotBlocked = !NrthUI_ShouldBlockServerEvent("onPlayerJoin");
+        bool pktReportBlocked = NrthUI_OnPacketSent(80); /* PACKET_ID_PLAYER_SCREENSHOT blocked by default */
+        bool pktNormalAllowed = !NrthUI_OnPacketSent(37); /* PACKET_ID_COMMAND allowed by default */
+        CHECK(stopResOk && evNotBlocked && pktReportBlocked && pktNormalAllowed,
+              "Live hook callbacks: script dumper (0x10004220), resource stop (0x100054a0), event filter (0x100050a0), packet filter (0x1001da80)");
+
         NrthLuaVmBridge *bridge = Nrth_GetLuaVmBridge();
         uint32_t dummyState = 0xCAFEBABEu;
         bridge->default_L_1013c95c  = &dummyState;

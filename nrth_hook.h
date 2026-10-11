@@ -174,6 +174,9 @@ bool Nrth_StartCurrentVehicleEngine_1002f0f0(void);
 bool Nrth_UnlockNearestVehicle_1002eea0(void);
 bool Nrth_StopCurrentVehicle(void);
 bool Nrth_DestroyCurrentVehicle(void);
+bool Nrth_GetLocalPlayerPosition(float *outX, float *outY, float *outZ);
+bool Nrth_TeleportLocalPlayer(float x, float y, float z);
+bool Nrth_StopClientResource_100054a0(const char *resName);
 
 #ifdef __cplusplus
 }
