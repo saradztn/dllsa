@@ -134,6 +134,14 @@ static void  *g_pFontAr = NULL;
 
 extern "C" void NrthUI_SetLanguageArabic(bool isArabic) { g_bArabic = isArabic; }
 extern "C" bool NrthUI_IsLanguageArabic(void)           { return g_bArabic; }
+
+/* DARKANARCHY logo texture (created by nrth_hook.cpp from nrth_logo.h pixels).
+ * NULL => header falls back to the code-drawn vector anarchy logo. */
+static void *s_logoTexture = NULL;
+
+extern "C" void NrthUI_SetLogoTexture(void *pD3D9Texture) { s_logoTexture = pD3D9Texture; }
+extern "C" bool NrthUI_HasLogoTexture(void)               { return s_logoTexture != NULL; }
+
 extern "C" void NrthUI_SetFonts(void *pEnglishFont, void *pArabicFont)
 {
     g_pFontEn = pEnglishFont;
@@ -2091,7 +2099,16 @@ void NrthUI_Build()
     dl->AddRectFilled(headerMin, headerMax, IM_COL32(16, 14, 14, 200), 8.0f);
     dl->AddRect(headerMin, headerMax, IM_COL32(90, 20, 20, 160), 8.0f);
 
-    DrawAnarchyLogo(dl, ImVec2(hp.x + 14.0f + logoR, hp.y + headerH * 0.5f), logoR, 2.4f);
+    if (s_logoTexture) {
+        /* Embedded PNG logo (nrth_logo.h -> D3D9 texture), rounded corners */
+        const ImVec2 lmin(hp.x + 14.0f, hp.y + 4.0f);
+        const ImVec2 lmax(lmin.x + (headerH - 8.0f), hp.y + headerH - 4.0f);
+        dl->AddImageRounded((ImTextureID)(uintptr_t)s_logoTexture, lmin, lmax,
+                            ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                            IM_COL32_WHITE, 8.0f);
+    } else {
+        DrawAnarchyLogo(dl, ImVec2(hp.x + 14.0f + logoR, hp.y + headerH * 0.5f), logoR, 2.4f);
+    }
 
     ImGui::SetCursorScreenPos(ImVec2(hp.x + 14.0f + logoR * 2.0f + 14.0f, hp.y + 8.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, kBloodHi);

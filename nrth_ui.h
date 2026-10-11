@@ -32,6 +32,12 @@ bool        NrthUI_IsLanguageArabic(void);
 const char *NrthUI_ShapeArabicText(const char *utf8In, char *outBuf, size_t outCap);
 void        NrthUI_SetFonts(void *pEnglishFont, void *pArabicFont);
 
+/* DARKANARCHY logo texture (optional; takes exactly one reference).
+ * When set, the header renders the embedded PNG-based logo; when NULL,
+ * it falls back to the code-drawn vector anarchy logo. */
+void NrthUI_SetLogoTexture(void *pD3D9Texture);
+bool NrthUI_HasLogoTexture(void);
+
 /* Arabic presentation-form shaper & simplified UAX#9 BiDi reorder
  * (exposed for verification tests; both are pure functions) */
 size_t NrthShape_ArabicCodepoints(const uint32_t *in, size_t n, uint32_t *out, size_t outCap);

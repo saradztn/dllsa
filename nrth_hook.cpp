@@ -39,6 +39,7 @@
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
 #include "nrth_fonts.h"
+#include "nrth_logo.h"
 #endif
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -2302,6 +2303,35 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
     if (!ImGui_ImplDX9_Init(pDevice)) {
         ImGui_ImplWin32_Shutdown();
         return;
+    }
+
+    /* DARKANARCHY logo texture from embedded RGBA pixels (nrth_logo.h).
+     * D3DFMT_A8R8G8B8 = BGRA byte order; D3DPOOL_MANAGED survives device reset.
+     * One reference is handed to the UI (NrthUI_SetLogoTexture). */
+    {
+        IDirect3DTexture9 *pLogoTex = NULL;
+        if (SUCCEEDED(pDevice->CreateTexture(kLogoWidth, kLogoHeight, 1, 0,
+                                             D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+                                             &pLogoTex, NULL))) {
+            D3DLOCKED_RECT lr;
+            if (SUCCEEDED(pLogoTex->LockRect(0, &lr, NULL, 0))) {
+                const uint8_t *src = kLogoPixelsRGBA;
+                for (int y = 0; y < kLogoHeight; ++y) {
+                    uint8_t *row = (uint8_t *)lr.pBits + (size_t)y * (size_t)lr.Pitch;
+                    for (int x = 0; x < kLogoWidth; ++x, src += 4) {
+                        row[x * 4 + 0] = src[2]; /* B */
+                        row[x * 4 + 1] = src[1]; /* G */
+                        row[x * 4 + 2] = src[0]; /* R */
+                        row[x * 4 + 3] = src[3]; /* A */
+                    }
+                }
+                pLogoTex->UnlockRect(0);
+                NrthUI_SetLogoTexture(pLogoTex);
+            } else {
+                pLogoTex->Release();
+            }
+        }
+        /* on failure the header silently falls back to the vector logo */
     }
 
     /* Subclass game window with SetWindowLongW (matches 0x100154df in NRTH.dll) */

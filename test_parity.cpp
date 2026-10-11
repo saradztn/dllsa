@@ -13,6 +13,7 @@
 #include "nrth_codec.h"
 #include "nrth_config.h"
 #include "nrth_fonts.h"
+#include "nrth_logo.h"
 #include "nrth_hook.h"
 #include "nrth_ui.h"
 
@@ -549,6 +550,35 @@ int main(void)
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
                   "Feature state intact after language toggles");
+        }
+
+        /* 10h. Embedded DARKANARCHY logo (nrth_logo.h) + texture hook */
+        {
+            CHECK(kLogoWidth == 128 && kLogoHeight == 128 &&
+                  sizeof(kLogoPixelsRGBA) == (size_t)kLogoWidth * (size_t)kLogoHeight * 4u,
+                  "logo: embedded RGBA buffer is 128x128x4");
+            /* dark icon: mean brightness below 64, with a red-dominant symbol */
+            {
+                uint64_t sum = 0, red = 0;
+                const size_t npx = (size_t)kLogoWidth * kLogoHeight;
+                for (size_t i = 0; i < npx; ++i) {
+                    const uint8_t r = kLogoPixelsRGBA[i * 4 + 0];
+                    const uint8_t g = kLogoPixelsRGBA[i * 4 + 1];
+                    const uint8_t b = kLogoPixelsRGBA[i * 4 + 2];
+                    sum += (uint64_t)(r + g + b) / 3u;
+                    if (r > 90 && r > g * 3 / 2 && r > b * 3 / 2) ++red;
+                }
+                CHECK(sum / npx < 64, "logo: dark coal background (mean < 64)");
+                CHECK(red > npx / 20, "logo: red anarchy symbol present (>5% pixels)");
+            }
+            static int fakeTex;
+            NrthUI_SetLogoTexture(&fakeTex);
+            CHECK(NrthUI_HasLogoTexture(), "logo: SetLogoTexture/HasLogoTexture round-trip");
+            NrthUI_SetLogoTexture(NULL);
+            CHECK(!NrthUI_HasLogoTexture(), "logo: NULL falls back to vector logo");
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "Feature state intact after logo texture set/clear");
         }
     }
 
