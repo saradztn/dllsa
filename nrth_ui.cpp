@@ -426,6 +426,97 @@ extern "C" bool NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmM
 }
 
 /* ===========================================================================
+ * BOT LAB core — pure, ImGui-free, testable in both suite modes.
+ * Local-bot feature (by XRAOUF request): client-side peds created through the
+ * game's own client-side Lua (createPed) — visible ONLY to the local player.
+ * This cannot and does not create server-side players: in MTA:SA only the
+ * server can add players, so nothing here joins/forges network sessions
+ * (authorized blue-team lab use on the operator's own server).
+ * =========================================================================== */
+extern void *g_pClientGame_10148ee8; /* defined in nrth_hook.cpp */
+
+extern "C" uint8_t NrthHook_IsInGame(void)
+{
+    return g_pClientGame_10148ee8 != NULL;
+}
+
+static uint32_t s_botLabDeployed = 0;
+static uint32_t s_stayModeOn     = 0;
+
+extern "C" uint32_t NrthUI_GetBotLabDeployed(void)    { return s_botLabDeployed; }
+extern "C" void     NrthUI_SetBotLabDeployed(uint32_t n) { s_botLabDeployed = n; }
+extern "C" uint32_t NrthUI_IsStayModeOn(void)         { return s_stayModeOn; }
+extern "C" void     NrthUI_SetStayMode(uint32_t on)   { s_stayModeOn = on ? 1u : 0u; }
+
+extern "C" void NrthUI_BuildBotsDeployLua(int count, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) {
+        return;
+    }
+    if (count < 1)   count = 1;
+    if (count > 64)  count = 64;
+    snprintf(buf, cap,
+        "-- DARKANARCHY BOT LAB | DEV: XRAOUF (local peds, this client only)\n"
+        "daBots = daBots or {}\n"
+        "local n = %d\n"
+        "local lp = getLocalPlayer()\n"
+        "local px, py, pz = getElementPosition(lp)\n"
+        "local skins = {7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}\n"
+        "for i = 1, n do\n"
+        "    local a  = (i / n) * math.pi * 2\n"
+        "    local bx = px + 3.0 * math.cos(a)\n"
+        "    local by = py + 3.0 * math.sin(a)\n"
+        "    local ped = createPed(skins[(i %% #skins) + 1], bx, by, pz)\n"
+        "    if ped then\n"
+        "        setElementHealth(ped, 100)\n"
+        "        table.insert(daBots, ped)\n"
+        "    end\n"
+        "end\n"
+        "if daBotTimer then killTimer(daBotTimer) end\n"
+        "daBotTimer = setTimer(function()\n"
+        "    for _, p in ipairs(daBots) do\n"
+        "        if isElement(p) then\n"
+        "            local x, y, z = getElementPosition(p)\n"
+        "            setPedRotation(p, math.random(0, 359))\n"
+        "            setElementPosition(p, x + math.random(-2, 2), y + math.random(-2, 2), z)\n"
+        "        end\n"
+        "    end\n"
+        "end, 1500, 0)\n",
+        count);
+}
+
+extern "C" void NrthUI_BuildBotsRemoveLua(char *buf, size_t cap)
+{
+    if (!buf || cap == 0) {
+        return;
+    }
+    snprintf(buf, cap,
+        "-- DARKANARCHY BOT LAB cleanup (local peds)\n"
+        "if daBotTimer then killTimer(daBotTimer) daBotTimer = nil end\n"
+        "if daBots then\n"
+        "    for _, p in ipairs(daBots) do\n"
+        "        if isElement(p) then destroyElement(p) end\n"
+        "    end\n"
+        "end\n"
+        "daBots = nil\n");
+}
+
+extern "C" void NrthUI_BuildGhostTwinLua(char *buf, size_t cap)
+{
+    if (!buf || cap == 0) {
+        return;
+    }
+    snprintf(buf, cap,
+        "-- DARKANARCHY STAY MODE | local ghost twin (this client only)\n"
+        "if daGhost and isElement(daGhost) then destroyElement(daGhost) end\n"
+        "local lp = getLocalPlayer()\n"
+        "local sk = getElementModel(lp)\n"
+        "local x, y, z = getElementPosition(lp)\n"
+        "daGhost = createPed((sk and sk ~= 0) and sk or 7, x, y - 1.5, z)\n"
+        "if daGhost then setElementFrozen(daGhost, true) end\n");
+}
+
+/* ===========================================================================
  * Full Dear ImGui + Embedded Lua 5.4.6 UI (Windows build)
  * =========================================================================== */
 #if (defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)) || defined(NRTH_UI_HEADLESS)
@@ -603,6 +694,10 @@ extern "C" void NrthUI_InitFonts(void)
 {
     ImGuiIO &io = ImGui::GetIO();
     io.Fonts->Clear();
+    /* Clear() empties the atlas: cached ImFont* from a previous context/atlas
+     * are dangling, and leaving them set would skip the first AddFont below
+     * (breaking MergeMode's "first font" rule on a fresh atlas). */
+    s_pFontMain = s_pFontTitle = s_pFontArabic = nullptr;
 
     static const ImWchar kArabicRanges[] = {
         0x0020, 0x00FF, /* Basic Latin + Supplement */
@@ -768,6 +863,11 @@ static int  s_topTab     = 0;
 static int  s_scriptsSub = 0;
 static int  s_cheatSub   = 1; /* Default to Features subtab in Cheat for instant access */
 static bool s_menuOpen   = true;
+
+#ifdef NRTH_UI_HEADLESS
+/* harness-only: lets the headless test open any tab like a sidebar click */
+extern "C" void NrthUI_TestSetTab(int tab) { s_topTab = tab; }
+#endif
 
 static char s_editorBuf[65536] =
     "-- ==========================================\n"
@@ -1860,6 +1960,120 @@ static void DrawColorSettings()
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * BOT LAB tab — local ped deployment + session analysis + stay mode
+ * ------------------------------------------------------------------------- */
+static void DrawBotsTab()
+{
+    const ImVec4 kPink  = ImVec4(0.96f, 0.30f, 0.55f, 1.0f);
+    const ImVec4 kGreen = ImVec4(0.30f, 0.85f, 0.45f, 1.0f);
+
+    ImGui::TextColored(kPink, "%s", TR("BOT LAB — LOCAL PEDS", "مختبر البوتات — شخصيات محلية"));
+    ImGui::TextDisabled("%s",
+        TR("Client-side peds via the game's own Lua (createPed). Visible to you only —"
+           " the server and other players never see them (only the server can add real players).",
+           "شخصيات من جهة العميل عبر لوا اللعبة (createPed). تراها أنت فقط —"
+           " الخادم واللاعبون الآخرون لا يرونها (فقط الخادم يضيف لاعبين حقيقيين)."));
+    ImGui::Spacing();
+
+    /* ---- Panel 1: session / entry analysis (real client state) ---------- */
+    if (ImGui::CollapsingHeader(TR("Connection Analysis##bot_an", "تحليل الدخول والاتصال##bot_an"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const bool inGame = NrthHook_IsInGame() != 0;
+        ImGui::TextColored(inGame ? kGreen : ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s",
+            inGame ? TR("Game state: IN SERVER", "حالة اللعبة: داخل الخادم")
+                   : TR("Game state: in menu", "حالة اللعبة: في القائمة"));
+        ImGui::TextDisabled("%s: %u",
+            TR("MTA client hooks armed", "خطافات عميل MTA المُسلّحة"),
+            (unsigned)Nrth_GetTotalInstalledHooks());
+        /* session clock: starts on first in-game detection */
+        static ULONGLONG s_firstInGame = 0;
+        if (inGame) {
+            if (s_firstInGame == 0) s_firstInGame = GetTickCount64();
+            const ULONGLONG dt = (GetTickCount64() - s_firstInGame) / 1000ull;
+            ImGui::TextDisabled("%s: %02u:%02u",
+                TR("Session time", "مدة الجلسة"),
+                (unsigned)((dt / 60ull) % 100ull), (unsigned)(dt % 60ull));
+        } else {
+            s_firstInGame = 0;
+            ImGui::TextDisabled("%s", TR("Session time: --:--", "مدة الجلسة: --:--"));
+        }
+    }
+    ImGui::Spacing();
+
+    /* ---- Panel 2: local bot deployment ---------------------------------- */
+    if (ImGui::CollapsingHeader(TR("Deploy Local Bots##bot_dp", "نشر البوتات المحلية##bot_dp"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        static int s_botCount = 8;
+        ImGui::SliderInt(TR("Bot count##bot_n", "عدد البوتات##bot_n"), &s_botCount, 1, 64);
+        ImGui::TextDisabled("%s: %u",
+            TR("Currently deployed", "المنشورة حاليًا"),
+            (unsigned)NrthUI_GetBotLabDeployed());
+
+        if (ImGui::Button(TR("Deploy##bot_go", "نشر##bot_go"), ImVec2(150, 34))) {
+            if (!NrthHook_IsInGame()) {
+                FeatureAction(TR("Enter the server first (mtasa://...)", "ادخل الخادم أولًا (mtasa://...)"));
+            } else {
+                static char s_lua[4096];
+                NrthUI_BuildBotsDeployLua(s_botCount, s_lua, sizeof(s_lua));
+                NrthUI_ExecuteLuaViaBridge(s_lua, strlen(s_lua), 0);
+                NrthUI_SetBotLabDeployed((uint32_t)s_botCount);
+                FeatureAction(TR("Local bots deployed", "تم نشر البوتات المحلية"));
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(TR("Remove All##bot_rm", "إزالة الكل##bot_rm"), ImVec2(150, 34))) {
+            static char s_lua[1024];
+            NrthUI_BuildBotsRemoveLua(s_lua, sizeof(s_lua));
+            NrthUI_ExecuteLuaViaBridge(s_lua, strlen(s_lua), 0);
+            NrthUI_SetBotLabDeployed(0);
+            FeatureAction(TR("Local bots removed", "تمت إزالة البوتات المحلية"));
+        }
+    }
+    ImGui::Spacing();
+
+    /* ---- Panel 3: stay mode (keep session alive while away) ------------- */
+    if (ImGui::CollapsingHeader(TR("Stay Mode##bot_stay", "وضع البقاء##bot_stay"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("%s",
+            TR("Keeps YOUR game session connected while you are away (anti-idle + a frozen"
+               " local twin in your skin). Do not close the game: when the client exits the"
+               " server removes you — nothing can stay connected after that.",
+               "يُبقي جلستك متصلة وأنت بعيد (مانع خمول + شبح محلي متجمد بشخصيتك)."
+               " لا تُغلق اللعبة: عند إغلاق العميل يحذفك الخادم — لا شيء يمكنه البقاء متصلًا بعدها."));
+
+        const bool stay = NrthUI_IsStayModeOn() != 0;
+        if (ImGui::Button(stay ? TR("Stay Mode: ON — disable##bot_sm",
+                                    "وضع البقاء: مُفعّل — إيقاف##bot_sm")
+                               : TR("Stay Mode: OFF — enable##bot_sm",
+                                    "وضع البقاء: متوقف — تفعيل##bot_sm"),
+                           ImVec2(240, 34))) {
+            /* flip the existing Anti-AFK feature row so the tabs stay in sync */
+            const size_t nFeat = sizeof(s_cheatFeatures) / sizeof(s_cheatFeatures[0]);
+            for (size_t i = 0; i < nFeat; ++i) {
+                if (strcmp(s_cheatFeatures[i].label, "Anti-AFK") == 0) {
+                    s_cheatFeatures[i].on = !stay;
+                    break;
+                }
+            }
+            NrthUI_SyncFeaturesToState();
+            if (!stay) {
+                static char s_lua[1024];
+                NrthUI_BuildGhostTwinLua(s_lua, sizeof(s_lua));
+                if (NrthHook_IsInGame()) {
+                    NrthUI_ExecuteLuaViaBridge(s_lua, strlen(s_lua), 0);
+                }
+                NrthUI_SetStayMode(1);
+                FeatureAction(TR("Stay Mode ON (anti-idle + local ghost)",
+                                 "وضع البقاء مُفعّل (مانع خمول + شبح محلي)"));
+            } else {
+                NrthUI_SetStayMode(0);
+                FeatureAction(TR("Stay Mode OFF", "تم إيقاف وضع البقاء"));
+            }
+        }
+    }
+}
+
 static void DrawConfigTab()
 {
     if (!s_configsScanned) ScanConfigs();
@@ -2277,15 +2491,16 @@ void NrthUI_Build()
             const char *enSub;
             const char *arSub;
         };
-        static const NavDef kNavs[5] = {
+        static const NavDef kNavs[6] = {
             { "LUA", "Scripts",  "السكربتات",     "Executor & Hooks",   "منفذ لوا والأحداث"   },
             { "DMP", "Dumper",   "ساحب الملفات",  "Client Extractor",   "استخراج السكربتات"   },
             { "CHT", "Cheat",    "خصائص الغش",   "Player & Combat",    "اللاعب والقتال"      },
             { "VEH", "Vehicle",  "المركبات",      "Mods & Spawner",     "تعديل المركبات"      },
+            { "BOT", "Bot Lab",  "مختبر البوتات", "Local Bots & Stay",  "بوتات محلية وبقاء"   },
             { "CFG", "Config",   "الإعدادات",     "Theme & Language",   "المظهر واللغة"       },
         };
 
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 6; ++i) {
             char hid[32];
             snprintf(hid, sizeof(hid), "nvx_top_%d", i);
             const char *title = (s_lang == 0) ? AR(kNavs[i].arTitle) : kNavs[i].enTitle;
@@ -2394,6 +2609,10 @@ void NrthUI_Build()
         } else if (s_topTab == 3) {
             ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
             DrawVehicleTab();
+            ImGui::EndChild();
+        } else if (s_topTab == 4) {
+            ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
+            DrawBotsTab();
             ImGui::EndChild();
         } else {
             ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);

@@ -310,7 +310,7 @@ extern "C" bool PatchByte_10011870(void *targetAddr, uint8_t opcodeByte, uint32_
  *   #09 0x10005b30: __thiscall (ret 0x08) — Client pass-through hook
  *   #10 0x10005b50: __cdecl    (ret)      — Anti-ScreenShot secondary guard
  * =========================================================================== */
-static void *g_pClientGame_10148ee8     = NULL;
+void *g_pClientGame_10148ee8     = NULL; /* non-static: read by NrthHook_IsInGame (nrth_ui core) */
 static void *g_ClientIfaces_10148ed4[6] = { NULL };
 static void *g_ResourceMgr_1013c948     = NULL;
 

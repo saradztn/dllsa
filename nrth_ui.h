@@ -32,6 +32,16 @@ void NrthUI_ReleaseTextures(void);
 void NrthUI_Build(void);
 void NrthUI_RenderFrame(bool menuOpen);
 
+/* ---- Bot Lab core (pure, testable in both suite modes) ------------------- */
+uint8_t  NrthHook_IsInGame(void);              /* g_pClientGame_10148ee8 != NULL   */
+uint32_t NrthUI_GetBotLabDeployed(void);       /* local peds currently deployed    */
+void     NrthUI_SetBotLabDeployed(uint32_t n);
+uint32_t NrthUI_IsStayModeOn(void);
+void     NrthUI_SetStayMode(uint32_t on);
+void     NrthUI_BuildBotsDeployLua(int count, char *buf, size_t cap);
+void     NrthUI_BuildBotsRemoveLua(char *buf, size_t cap);
+void     NrthUI_BuildGhostTwinLua(char *buf, size_t cap);
+
 const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);
 bool                 NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmMode);

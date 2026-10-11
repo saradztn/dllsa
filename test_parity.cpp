@@ -18,7 +18,11 @@
 #ifdef NRTH_UI_HEADLESS
 /* harness-only hook implemented inside nrth_ui.cpp's UI region */
 extern "C" void NrthUI_TestSetLanguage(int lang);
+extern "C" void NrthUI_TestSetTab(int tab);
 #endif
+
+/* defined in nrth_hook.cpp (C++ linkage); read through NrthHook_IsInGame */
+extern void *g_pClientGame_10148ee8;
 #include "nrth_hook.h"
 #include "nrth_ui.h"
 #include "imgui.h"
@@ -676,6 +680,94 @@ int main(void)
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
                   "Feature state intact after headless UI frames");
+        }
+#endif /* NRTH_UI_HEADLESS */
+    }
+
+    /* 11. BOT LAB: local-bot Lua builders + in-game detection + state */
+    {
+        /* 11a. deploy builder: embeds the count, clamps 1..64 */
+        {
+            static char lua[4096];
+            NrthUI_BuildBotsDeployLua(5, lua, sizeof(lua));
+            CHECK(strstr(lua, "local n = 5") != NULL && strstr(lua, "createPed") != NULL &&
+                  strstr(lua, "setTimer") != NULL,
+                  "botlab: deploy Lua embeds count=5 with createPed + wander timer");
+            NrthUI_BuildBotsDeployLua(0, lua, sizeof(lua));
+            CHECK(strstr(lua, "local n = 1") != NULL, "botlab: count clamps low to 1");
+            NrthUI_BuildBotsDeployLua(999, lua, sizeof(lua));
+            CHECK(strstr(lua, "local n = 64") != NULL, "botlab: count clamps high to 64");
+        }
+        /* 11b. remove builder */
+        {
+            static char lua[1024];
+            NrthUI_BuildBotsRemoveLua(lua, sizeof(lua));
+            CHECK(strstr(lua, "killTimer") != NULL && strstr(lua, "destroyElement") != NULL &&
+                  strstr(lua, "daBots = nil") != NULL,
+                  "botlab: remove Lua kills timer + destroys all peds");
+        }
+        /* 11c. ghost twin builder */
+        {
+            static char lua[1024];
+            NrthUI_BuildGhostTwinLua(lua, sizeof(lua));
+            CHECK(strstr(lua, "createPed") != NULL && strstr(lua, "setElementFrozen") != NULL &&
+                  strstr(lua, "getElementModel") != NULL,
+                  "botlab: ghost twin Lua copies local skin and freezes");
+        }
+        /* 11d. in-game detection reads the real client-game pointer */
+        {
+            CHECK(NrthHook_IsInGame() == 0, "botlab: not in game by default");
+            void *saved = g_pClientGame_10148ee8;
+            g_pClientGame_10148ee8 = (void *)&saved; /* simulate joining a server */
+            CHECK(NrthHook_IsInGame() == 1, "botlab: IsInGame true when client-game ptr set");
+            g_pClientGame_10148ee8 = saved;
+            CHECK(NrthHook_IsInGame() == 0, "botlab: IsInGame false again after clear");
+        }
+        /* 11e. bot-lab state round-trips and leaves feature state intact */
+        {
+            NrthUI_SetBotLabDeployed(7);
+            NrthUI_SetStayMode(1);
+            CHECK(NrthUI_GetBotLabDeployed() == 7 && NrthUI_IsStayModeOn() == 1,
+                  "botlab: deployed/stay state round-trip");
+            NrthUI_SetBotLabDeployed(0);
+            NrthUI_SetStayMode(0);
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "botlab: feature state intact after bot-lab state changes");
+        }
+        /* 11f. headless render of the Bot Lab tab (AR default + EN) */
+#ifdef NRTH_UI_HEADLESS
+        {
+            ImGui::CreateContext();
+            ImGuiIO &io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(880.0f, 570.0f);
+            io.DeltaTime   = 1.0f / 60.0f;
+            io.IniFilename = NULL;
+            NrthUI_ApplyTheme();
+            NrthUI_InitFonts();
+            CHECK(io.Fonts->Build(), "botlab UI: font atlas builds");
+
+            NrthUI_TestSetTab(4); /* Bot Lab */
+            NrthUI_TestSetLanguage(0);
+            ImGui::NewFrame();
+            NrthUI_RenderFrame(true);
+            ImGui::Render();
+            ImDrawData *dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "botlab UI: Arabic Bot Lab frame renders (>100 vtx)");
+            NrthUI_TestSetLanguage(1);
+            ImGui::NewFrame();
+            NrthUI_RenderFrame(true);
+            ImGui::Render();
+            dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "botlab UI: English Bot Lab frame renders (>100 vtx)");
+            NrthUI_TestSetLanguage(0);
+            NrthUI_TestSetTab(0);
+            ImGui::DestroyContext();
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "botlab UI: feature state intact after Bot Lab frames");
         }
 #endif /* NRTH_UI_HEADLESS */
     }
