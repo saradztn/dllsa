@@ -2082,6 +2082,10 @@ static void DrawCsxTab()
     static bool  s_csxModule  = false;
     static char  s_simSample[64] = "";
 
+    /* A/B differential snapshots (prove what a real spoofer changed) */
+    static NrthCsxSnapshot s_snapA, s_snapB;
+    static bool s_hasA = false, s_hasB = false;
+
     static const char *kMtaKeys[] = {
         "SOFTWARE\\Multi Theft Auto: San Andreas All\\1.6",
         "SOFTWARE\\Multi Theft Auto: San Andreas\\1.6",
@@ -2143,6 +2147,17 @@ static void DrawCsxTab()
         ScanNow();
         NrthCsx_SimulateSpoofId(s_guid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
     }
+    auto CaptureSnapshot = [&](NrthCsxSnapshot &out) {
+        ScanNow();
+        memset(&out, 0, sizeof(out));
+        strncpy(out.machineGuid, s_guid, sizeof(out.machineGuid) - 1);
+        out.volSerial = (uint32_t)s_volSerial;
+        out.mtaKeys   = (int32_t)s_mtaKeys;
+        out.flags     = (s_clsid2    ? NRTH_CSX_F_CLSID2   : 0u) |
+                        (s_csxModule ? NRTH_CSX_F_MODULE   : 0u) |
+                        (s_probeHits[0] ? NRTH_CSX_F_PROBE : 0u) |
+                        (s_cacheDir  ? NRTH_CSX_F_CACHEDIR : 0u);
+    };
 
     /* ---- Panel 1: identity surface (read-only) -------------------------- */
     if (ImGui::CollapsingHeader(TR("Identity Surface (read-only)##csx_id", "سطح الهوية (قراءة فقط)##csx_id"),
@@ -2177,6 +2192,52 @@ static void DrawCsxTab()
                " the report.", "استخدمه مع عميل CSX حقيقي في المعمل: شغّل CSX ثم أعد"
                " الفحص، والفارق (مفتاح CLSID2، إسقاط csxprobe.exe، وحدة csxcheat.dll)"
                " يثبت صحة البلاغ."));
+        ImGui::Separator();
+
+        /* ---- A/B differential audit: snapshot before / snapshot after ---- */
+        if (ImGui::Button(TR("Snapshot BEFORE (A)##csx_sa", "لقطة قبل (A)##csx_sa"),
+                          ImVec2(200, 28))) {
+            CaptureSnapshot(s_snapA);
+            s_hasA = true;
+            FeatureAction(TR("Snapshot A captured", "التُقطت اللقطة A"));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(TR("Snapshot AFTER (B)##csx_sb", "لقطة بعد (B)##csx_sb"),
+                          ImVec2(200, 28))) {
+            CaptureSnapshot(s_snapB);
+            s_hasB = true;
+            FeatureAction(TR("Snapshot B captured", "التُقطت اللقطة B"));
+        }
+        ImGui::TextDisabled("A %s | B %s",
+            s_hasA ? TR("captured", "مُلتقطة") : TR("-", "-"),
+            s_hasB ? TR("captured", "مُلتقطة") : TR("-", "-"));
+
+        if (s_hasA && s_hasB) {
+            const uint32_t newArt = NrthCsx_SnapNewArtifacts(&s_snapA, &s_snapB);
+            const bool idChanged  = NrthCsx_SnapIdentityChanged(&s_snapA, &s_snapB);
+            int artCount = 0;
+            for (uint32_t bit = 1; bit; bit <<= 1) {
+                if (newArt & bit) ++artCount;
+            }
+            if (idChanged || artCount > 0) {
+                ImGui::TextColored(kRed, "%s",
+                    TR("VERDICT: spoofer activity CONFIRMED between A and B",
+                       "الحكم: تُثبت الأدلة نشاط spoofer بين A و B"));
+            } else {
+                ImGui::TextColored(kGreen, "%s",
+                    TR("VERDICT: no identity/artifact change between A and B",
+                       "الحكم: لا تغيّر في الهوية أو الآثار بين A و B"));
+            }
+            ImGui::TextDisabled("MachineGuid %s | %s: %08X -> %08X",
+                idChanged ? TR("CHANGED", "تغيّر") : TR("same", "النفس"),
+                TR("Volume serial", "سيريال الوحدة"),
+                s_snapA.volSerial, s_snapB.volSerial);
+            ImGui::TextDisabled("MTA keys: %d -> %d | new artifacts: %d",
+                s_snapA.mtaKeys, s_snapB.mtaKeys, artCount);
+            if (newArt & NRTH_CSX_F_CLSID2)  ImGui::TextColored(kRed, " + CLSID2 key");
+            if (newArt & NRTH_CSX_F_MODULE)  ImGui::TextColored(kRed, " + csxcheat.dll loaded");
+            if (newArt & NRTH_CSX_F_PROBE)   ImGui::TextColored(kRed, " + csxprobe.exe dropped");
+        }
     }
 
     /* ---- Panel 3: dry-run spoof simulator (display only) ---------------- */

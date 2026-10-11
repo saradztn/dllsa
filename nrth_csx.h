@@ -170,3 +170,35 @@ static void NrthCsx_DecryptXor16(uint8_t *buf, size_t len)
         buf[i] ^= kKey[i & 15];
     }
 }
+
+/* ---- Differential audit (A/B snapshots): prove what a real spoofer changed */
+typedef struct NrthCsxSnapshot {
+    char     machineGuid[128];
+    uint32_t volSerial;
+    int32_t  mtaKeys;
+    uint32_t flags; /* NRTH_CSX_F_* */
+} NrthCsxSnapshot;
+
+#define NRTH_CSX_F_CLSID2    0x1u  /* Explorer\CLSID2 key present      */
+#define NRTH_CSX_F_MODULE    0x2u  /* csxcheat.dll loaded in-process   */
+#define NRTH_CSX_F_PROBE     0x4u  /* csxprobe.exe dropped on disk     */
+#define NRTH_CSX_F_CACHEDIR  0x8u  /* MTA cache dir present            */
+
+/* identity inputs a spoofer rotates: MachineGuid + volume serial */
+static int NrthCsx_SnapIdentityChanged(const NrthCsxSnapshot *a, const NrthCsxSnapshot *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    return strcmp(a->machineGuid, b->machineGuid) != 0 ||
+           a->volSerial != b->volSerial;
+}
+
+/* artifacts that APPEARED in b (bitmask of NRTH_CSX_F_*) */
+static uint32_t NrthCsx_SnapNewArtifacts(const NrthCsxSnapshot *a, const NrthCsxSnapshot *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    return b->flags & ~a->flags;
+}

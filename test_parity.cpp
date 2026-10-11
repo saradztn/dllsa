@@ -896,6 +896,36 @@ int main(void)
         }
         /* 13d. signature table size parity */
         CHECK(NRTH_CSX_SIG_COUNT == 13, "csx-re: signature table has 13 evidence sigs");
+        /* 13e. differential A/B snapshot helpers (pure) */
+        {
+            NrthCsxSnapshot a, b;
+            memset(&a, 0, sizeof(a));
+            memset(&b, 0, sizeof(b));
+            strncpy(a.machineGuid, "guid-1", sizeof(a.machineGuid) - 1);
+            strncpy(b.machineGuid, "guid-1", sizeof(b.machineGuid) - 1);
+            a.volSerial = 0x11223344;
+            b.volSerial = 0x11223344;
+            a.flags = 0;
+            b.flags = 0;
+            CHECK(!NrthCsx_SnapIdentityChanged(&a, &b) &&
+                  NrthCsx_SnapNewArtifacts(&a, &b) == 0,
+                  "csx-ab: identical snapshots -> no change, no new artifacts");
+            strncpy(b.machineGuid, "guid-2", sizeof(b.machineGuid) - 1);
+            b.volSerial = 0xAABBCCDD;
+            CHECK(NrthCsx_SnapIdentityChanged(&a, &b),
+                  "csx-ab: MachineGuid/volume change is flagged as identity change");
+            b.machineGuid[0] = 'g'; /* restore guid, keep vol change covered above */
+            strncpy(b.machineGuid, "guid-1", sizeof(b.machineGuid) - 1);
+            b.volSerial = 0x11223344;
+            b.flags = NRTH_CSX_F_CLSID2 | NRTH_CSX_F_PROBE;
+            CHECK(NrthCsx_SnapNewArtifacts(&a, &b) == (NRTH_CSX_F_CLSID2 | NRTH_CSX_F_PROBE),
+                  "csx-ab: new CLSID2+probe artifacts detected in B");
+            CHECK(!NrthCsx_SnapIdentityChanged(&a, &b),
+                  "csx-ab: artifact-only change is not reported as identity change");
+            CHECK(!NrthCsx_SnapIdentityChanged(NULL, &b) &&
+                  NrthCsx_SnapNewArtifacts(NULL, &b) == 0,
+                  "csx-ab: helpers NULL-safe");
+        }
     }
 
     printf("---------------------------------------------------\n");
