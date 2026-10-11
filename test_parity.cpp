@@ -684,58 +684,28 @@ int main(void)
 #endif /* NRTH_UI_HEADLESS */
     }
 
-    /* 11. BOT LAB: local-bot Lua builders + in-game detection + state */
+    /* 11. SESSION LAB: in-game detection + stay-mode state (ped-deploy
+     * feature was removed by design; server-visible bots live server-side) */
     {
-        /* 11a. deploy builder: embeds the count, clamps 1..64 */
+        /* 11a. in-game detection reads the real client-game pointer */
         {
-            static char lua[4096];
-            NrthUI_BuildBotsDeployLua(5, lua, sizeof(lua));
-            CHECK(strstr(lua, "local n = 5") != NULL && strstr(lua, "createPed") != NULL &&
-                  strstr(lua, "setTimer") != NULL,
-                  "botlab: deploy Lua embeds count=5 with createPed + wander timer");
-            NrthUI_BuildBotsDeployLua(0, lua, sizeof(lua));
-            CHECK(strstr(lua, "local n = 1") != NULL, "botlab: count clamps low to 1");
-            NrthUI_BuildBotsDeployLua(999, lua, sizeof(lua));
-            CHECK(strstr(lua, "local n = 64") != NULL, "botlab: count clamps high to 64");
-        }
-        /* 11b. remove builder */
-        {
-            static char lua[1024];
-            NrthUI_BuildBotsRemoveLua(lua, sizeof(lua));
-            CHECK(strstr(lua, "killTimer") != NULL && strstr(lua, "destroyElement") != NULL &&
-                  strstr(lua, "daBots = nil") != NULL,
-                  "botlab: remove Lua kills timer + destroys all peds");
-        }
-        /* 11c. ghost twin builder */
-        {
-            static char lua[1024];
-            NrthUI_BuildGhostTwinLua(lua, sizeof(lua));
-            CHECK(strstr(lua, "createPed") != NULL && strstr(lua, "setElementFrozen") != NULL &&
-                  strstr(lua, "getElementModel") != NULL,
-                  "botlab: ghost twin Lua copies local skin and freezes");
-        }
-        /* 11d. in-game detection reads the real client-game pointer */
-        {
-            CHECK(NrthHook_IsInGame() == 0, "botlab: not in game by default");
+            CHECK(NrthHook_IsInGame() == 0, "session: not in game by default");
             void *saved = g_pClientGame_10148ee8;
             g_pClientGame_10148ee8 = (void *)&saved; /* simulate joining a server */
-            CHECK(NrthHook_IsInGame() == 1, "botlab: IsInGame true when client-game ptr set");
+            CHECK(NrthHook_IsInGame() == 1, "session: IsInGame true when client-game ptr set");
             g_pClientGame_10148ee8 = saved;
-            CHECK(NrthHook_IsInGame() == 0, "botlab: IsInGame false again after clear");
+            CHECK(NrthHook_IsInGame() == 0, "session: IsInGame false again after clear");
         }
-        /* 11e. bot-lab state round-trips and leaves feature state intact */
+        /* 11b. stay-mode state round-trips and leaves feature state intact */
         {
-            NrthUI_SetBotLabDeployed(7);
             NrthUI_SetStayMode(1);
-            CHECK(NrthUI_GetBotLabDeployed() == 7 && NrthUI_IsStayModeOn() == 1,
-                  "botlab: deployed/stay state round-trip");
-            NrthUI_SetBotLabDeployed(0);
+            CHECK(NrthUI_IsStayModeOn() == 1, "session: stay mode round-trip");
             NrthUI_SetStayMode(0);
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
-                  "botlab: feature state intact after bot-lab state changes");
+                  "session: feature state intact after stay-mode changes");
         }
-        /* 11f. headless render of the Bot Lab tab (AR default + EN) */
+        /* 11c. headless render of the Session Lab tab (AR default + EN) */
 #ifdef NRTH_UI_HEADLESS
         {
             ImGui::CreateContext();
@@ -745,29 +715,29 @@ int main(void)
             io.IniFilename = NULL;
             NrthUI_ApplyTheme();
             NrthUI_InitFonts();
-            CHECK(io.Fonts->Build(), "botlab UI: font atlas builds");
+            CHECK(io.Fonts->Build(), "session UI: font atlas builds");
 
-            NrthUI_TestSetTab(4); /* Bot Lab */
+            NrthUI_TestSetTab(4); /* Session Lab */
             NrthUI_TestSetLanguage(0);
             ImGui::NewFrame();
             NrthUI_RenderFrame(true);
             ImGui::Render();
             ImDrawData *dd = ImGui::GetDrawData();
             CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
-                  "botlab UI: Arabic Bot Lab frame renders (>100 vtx)");
+                  "session UI: Arabic Session frame renders (>100 vtx)");
             NrthUI_TestSetLanguage(1);
             ImGui::NewFrame();
             NrthUI_RenderFrame(true);
             ImGui::Render();
             dd = ImGui::GetDrawData();
             CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
-                  "botlab UI: English Bot Lab frame renders (>100 vtx)");
+                  "session UI: English Session frame renders (>100 vtx)");
             NrthUI_TestSetLanguage(0);
             NrthUI_TestSetTab(0);
             ImGui::DestroyContext();
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
-                  "botlab UI: feature state intact after Bot Lab frames");
+                  "session UI: feature state intact after Session frames");
         }
 #endif /* NRTH_UI_HEADLESS */
     }
