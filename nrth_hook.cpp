@@ -324,34 +324,34 @@ static void *g_ResourceMgr_1013c948     = NULL;
 #endif
 typedef int         (NRTH_CDECL *PFN_lua_CFunction)(void *L);
 typedef int         (NRTH_CDECL *PFN_lua_pcall_t)(void *L, int nargs, int nresults, int errfunc);
-typedef void        (NRTH_CDECL *PFN_lua_pushboolean_t)(void *L, int b);
-typedef void        (NRTH_CDECL *PFN_lua_pushnumber_t)(void *L, double n);
+typedef size_t      (NRTH_CDECL *PFN_lua_objlen_t)(void *L, int idx);
+typedef void        (NRTH_CDECL *PFN_lua_rawseti_t)(void *L, int idx, int n);
 typedef const char *(NRTH_CDECL *PFN_lua_tolstring_t)(void *L, int idx, size_t *len);
 typedef void        (NRTH_CDECL *PFN_lua_pushcclosure_t)(void *L, PFN_lua_CFunction fn, int n);
 typedef int         (NRTH_CDECL *PFN_lua_type_t)(void *L, int idx);
 typedef double      (NRTH_CDECL *PFN_lua_tonumber_t)(void *L, int idx);
 typedef int         (NRTH_CDECL *PFN_lua_gettop_t)(void *L);
-typedef void        (NRTH_CDECL *PFN_lua_rawseti_t)(void *L, int idx, int n);
+typedef void        (NRTH_CDECL *PFN_lua_pushnumber_t)(void *L, double n);
 typedef void        (NRTH_CDECL *PFN_lua_pushstring_t)(void *L, const char *s);
-typedef void        (NRTH_CDECL *PFN_lua_getfield_t)(void *L, int idx, const char *k);
+typedef void        (NRTH_CDECL *PFN_lua_settop_t)(void *L, int idx);
 typedef void        (NRTH_CDECL *PFN_lua_createtable_t)(void *L, int narr, int nrec);
 typedef void        (NRTH_CDECL *PFN_lua_setfield_t)(void *L, int idx, const char *k);
-typedef void        (NRTH_CDECL *PFN_lua_settop_t)(void *L, int idx);
+typedef void        (NRTH_CDECL *PFN_lua_rawgeti_t)(void *L, int idx, int n);
 
-static PFN_lua_pcall_t        g_lua_pcall_1013c974        = NULL;
-static PFN_lua_pushboolean_t  g_lua_pushboolean_1013c978  = NULL;
-static PFN_lua_pushnumber_t   g_lua_pushnumber_1013c97c   = NULL;
-static PFN_lua_tolstring_t    g_lua_tolstring_1013c980    = NULL;
-static PFN_lua_pushcclosure_t g_lua_pushcclosure_1013c984 = NULL;
-static PFN_lua_type_t         g_lua_type_1013c988         = NULL;
-static PFN_lua_tonumber_t     g_lua_tonumber_1013c98c     = NULL;
-static PFN_lua_gettop_t       g_lua_gettop_1013c990       = NULL;
-static PFN_lua_rawseti_t      g_lua_rawseti_1013c994      = NULL;
-static PFN_lua_pushstring_t   g_lua_pushstring_1013c998   = NULL;
-static PFN_lua_getfield_t     g_lua_getfield_1013c99c     = NULL;
-static PFN_lua_createtable_t  g_lua_createtable_1013c9a0  = NULL;
-static PFN_lua_setfield_t     g_lua_setfield_1013c9a4     = NULL;
-static PFN_lua_settop_t       g_lua_settop_1013c9a8       = NULL;
+static PFN_lua_pcall_t        g_lua_pcall_1013c974        = NULL; /* Scan #10 (Sig #12) */
+static PFN_lua_objlen_t       g_lua_objlen_1013c978       = NULL; /* Scan #16 (Sig #7)  */
+static PFN_lua_rawseti_t      g_lua_rawseti_1013c97c      = NULL; /* Scan #15 (Extra #6)*/
+static PFN_lua_tolstring_t    g_lua_tolstring_1013c980    = NULL; /* Scan #03 (Extra #0)*/
+static PFN_lua_pushcclosure_t g_lua_pushcclosure_1013c984 = NULL; /* Scan #00 (Sig #4)  */
+static PFN_lua_type_t         g_lua_type_1013c988         = NULL; /* Scan #07 (Sig #8)  */
+static PFN_lua_tonumber_t     g_lua_tonumber_1013c98c     = NULL; /* Scan #05 (Sig #1)  */
+static PFN_lua_gettop_t       g_lua_gettop_1013c990       = NULL; /* Scan #02 (Sig #14) */
+static PFN_lua_pushnumber_t   g_lua_pushnumber_1013c994   = NULL; /* Scan #19 (Extra #7)*/
+static PFN_lua_pushstring_t   g_lua_pushstring_1013c998   = NULL; /* Scan #18 (Sig #18) */
+static PFN_lua_settop_t       g_lua_settop_1013c99c       = NULL; /* Scan #13 (Sig #17) */
+static PFN_lua_createtable_t  g_lua_createtable_1013c9a0  = NULL; /* Scan #04 (Extra #1)*/
+static PFN_lua_setfield_t     g_lua_setfield_1013c9a4     = NULL; /* Scan #01 (Sig #11) */
+static PFN_lua_rawgeti_t      g_lua_rawgeti_1013c9a8      = NULL; /* Scan #14 (Extra #5)*/
 
 struct NrthActiveResourceSlot {
     char  name[64];
@@ -365,73 +365,135 @@ static uint32_t               s_stoppedResourceCount = 0;
 /* Custom Lua `api` closures registered by sub_10010ff0 (0x1000f920..0x100112a0) */
 static int NRTH_CDECL LuaApi_StoppedResources_1000f920(void *L)
 {
-    if (g_lua_createtable_1013c9a0) {
-        g_lua_createtable_1013c9a0(L, (int)s_stoppedResourceCount, 0);
-        if (g_lua_pushstring_1013c998 && g_lua_rawseti_1013c994) {
-            for (uint32_t i = 0; i < s_stoppedResourceCount; ++i) {
-                g_lua_pushstring_1013c998(L, s_stoppedResources[i]);
-                g_lua_rawseti_1013c994(L, -2, (int)(i + 1));
-            }
+    if (!L || !g_lua_gettop_1013c990 || !g_lua_type_1013c988 ||
+        !g_lua_tolstring_1013c980 || !g_lua_objlen_1013c978 || !g_lua_rawgeti_1013c9a8) {
+        return 0;
+    }
+    int nargs = g_lua_gettop_1013c990(L);
+    if (nargs < 1) {
+        return 0;
+    }
+    int argIdx = 1;
+    int t1 = g_lua_type_1013c988(L, 1);
+    if (t1 == 4) { /* LUA_TSTRING */
+        size_t slen = 0;
+        const char *s = g_lua_tolstring_1013c980(L, 1, &slen);
+        if (s && slen > 0) {
+            Nrth_StopClientResource_100054a0(s);
         }
-        return 1;
+        return 0;
+    }
+    if (t1 == 5 && nargs >= 2) {
+        int t2 = g_lua_type_1013c988(L, 2);
+        if (t2 == 4) {
+            size_t slen = 0;
+            const char *s = g_lua_tolstring_1013c980(L, 2, &slen);
+            if (s && slen > 0) {
+                Nrth_StopClientResource_100054a0(s);
+            }
+            return 0;
+        }
+        argIdx = 2;
+    }
+    if (g_lua_type_1013c988(L, argIdx) == 5 && g_lua_settop_1013c99c) { /* LUA_TTABLE */
+        size_t count = g_lua_objlen_1013c978(L, argIdx);
+        for (size_t i = 1; i <= count; ++i) {
+            g_lua_rawgeti_1013c9a8(L, argIdx, (int)i);
+            if (g_lua_type_1013c988(L, -1) == 4) {
+                size_t slen = 0;
+                const char *s = g_lua_tolstring_1013c980(L, -1, &slen);
+                if (s && slen > 0) {
+                    Nrth_StopClientResource_100054a0(s);
+                }
+            }
+            g_lua_settop_1013c99c(L, -2);
+        }
     }
     return 0;
 }
 
 static int NRTH_CDECL LuaApi_ShootBullet_1000fe90(void *L)
 {
-    if (g_lua_pushboolean_1013c978) {
-        g_lua_pushboolean_1013c978(L, 1);
-        return 1;
-    }
+    (void)L;
     return 0;
 }
 
 static int NRTH_CDECL LuaApi_GetMarkersPos_10010cc0(void *L)
 {
-    if (g_lua_createtable_1013c9a0) {
-        uint32_t mCount = NrthUI_GetMarkerCount();
-        g_lua_createtable_1013c9a0(L, (int)mCount, 0);
-        if (g_lua_pushnumber_1013c97c && g_lua_rawseti_1013c994) {
-            for (uint32_t i = 0; i < mCount; ++i) {
-                float mx = 0.0f, my = 0.0f, mz = 0.0f;
-                if (NrthUI_GetMarkerAt(i, &mx, &my, &mz)) {
-                    g_lua_createtable_1013c9a0(L, 3, 0);
-                    g_lua_pushnumber_1013c97c(L, (double)mx);
-                    g_lua_rawseti_1013c994(L, -2, 1);
-                    g_lua_pushnumber_1013c97c(L, (double)my);
-                    g_lua_rawseti_1013c994(L, -2, 2);
-                    g_lua_pushnumber_1013c97c(L, (double)mz);
-                    g_lua_rawseti_1013c994(L, -2, 3);
-                    g_lua_rawseti_1013c994(L, -2, (int)(i + 1));
-                }
+    if (!L || !g_lua_gettop_1013c990 || !g_lua_tolstring_1013c980 ||
+        !g_lua_pushstring_1013c998 || !g_lua_setfield_1013c9a4 ||
+        !g_lua_type_1013c988 || !g_lua_rawseti_1013c97c ||
+        !g_lua_createtable_1013c9a0 || !g_lua_objlen_1013c978 ||
+        !g_lua_pushnumber_1013c994) {
+        return 0;
+    }
+    if (g_lua_gettop_1013c990(L) < 1 || g_lua_type_1013c988(L, 1) != 4) {
+        return 0;
+    }
+    size_t qlen = 0;
+    const char *query = g_lua_tolstring_1013c980(L, 1, &qlen);
+    if (!query) {
+        return 0;
+    }
+    uint32_t mCount = NrthUI_GetMarkerCount();
+    if (strcmp(query, "all") == 0) {
+        g_lua_createtable_1013c9a0(L, 0, 0);
+        for (uint32_t i = 0; i < mCount; ++i) {
+            float mx = 0.0f, my = 0.0f, mz = 0.0f;
+            if (NrthUI_GetMarkerAt(i, &mx, &my, &mz)) {
+                char mName[32];
+                snprintf(mName, sizeof(mName), "Marker #%u", (unsigned)(i + 1));
+                g_lua_createtable_1013c9a0(L, 0, 0);
+                g_lua_pushstring_1013c998(L, mName);
+                g_lua_setfield_1013c9a4(L, -2, "name");
+                g_lua_pushnumber_1013c994(L, (double)mx);
+                g_lua_setfield_1013c9a4(L, -2, "x");
+                g_lua_pushnumber_1013c994(L, (double)my);
+                g_lua_setfield_1013c9a4(L, -2, "y");
+                g_lua_pushnumber_1013c994(L, (double)mz);
+                g_lua_setfield_1013c9a4(L, -2, "z");
+                g_lua_rawseti_1013c97c(L, -2, (int)(i + 1));
             }
         }
         return 1;
+    }
+    for (uint32_t i = 0; i < mCount; ++i) {
+        float mx = 0.0f, my = 0.0f, mz = 0.0f;
+        if (NrthUI_GetMarkerAt(i, &mx, &my, &mz)) {
+            char mName[32];
+            snprintf(mName, sizeof(mName), "Marker #%u", (unsigned)(i + 1));
+            if (strstr(mName, query) != NULL || strcmp(mName, query) == 0) {
+                g_lua_pushnumber_1013c994(L, (double)mx);
+                g_lua_pushnumber_1013c994(L, (double)my);
+                g_lua_pushnumber_1013c994(L, (double)mz);
+                return 3;
+            }
+        }
     }
     return 0;
 }
 
 static int NRTH_CDECL LuaApi_SyncPosition_10010ad0(void *L)
 {
-    if (g_lua_gettop_1013c990 && g_lua_tonumber_1013c98c && g_lua_gettop_1013c990(L) >= 3) {
-        g_WeaponAimSync.fAimX = (float)g_lua_tonumber_1013c98c(L, 1);
-        g_WeaponAimSync.fAimY = (float)g_lua_tonumber_1013c98c(L, 2);
-        g_WeaponAimSync.fAimZ = (float)g_lua_tonumber_1013c98c(L, 3);
+    if (!L || !g_lua_gettop_1013c990 || !g_lua_tonumber_1013c98c) {
+        return 0;
     }
-    if (g_lua_pushboolean_1013c978) {
-        g_lua_pushboolean_1013c978(L, 1);
-        return 1;
+    int nargs = g_lua_gettop_1013c990(L);
+    int base  = 0;
+    if (g_lua_type_1013c988 && nargs >= 1 && g_lua_type_1013c988(L, 1) != 3) {
+        base = 1;
+    }
+    if (nargs >= base + 3) {
+        g_WeaponAimSync.fAimX = (float)g_lua_tonumber_1013c98c(L, base + 1);
+        g_WeaponAimSync.fAimY = (float)g_lua_tonumber_1013c98c(L, base + 2);
+        g_WeaponAimSync.fAimZ = (float)g_lua_tonumber_1013c98c(L, base + 3);
     }
     return 0;
 }
 
 static int NRTH_CDECL LuaApi_SyncVelocity_10010ba0(void *L)
 {
-    if (g_lua_pushboolean_1013c978) {
-        g_lua_pushboolean_1013c978(L, 1);
-        return 1;
-    }
+    (void)L;
     return 0;
 }
 
@@ -439,17 +501,16 @@ static void RegisterLuaApi_10010ff0(void *L)
 {
 #if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
     if (!L || !g_lua_createtable_1013c9a0 || !g_lua_pushcclosure_1013c984 ||
-        !g_lua_setfield_1013c9a4 || !g_lua_settop_1013c9a8) {
+        !g_lua_setfield_1013c9a4) {
         return;
     }
     if (!Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_createtable_1013c9a0) ||
         !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_pushcclosure_1013c984) ||
-        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_setfield_1013c9a4) ||
-        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_settop_1013c9a8)) {
+        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_setfield_1013c9a4)) {
         return;
     }
     const int LUA_GLOBALSINDEX_51 = -10002;
-    g_lua_createtable_1013c9a0(L, 0, 4);
+    g_lua_createtable_1013c9a0(L, 0, 6);
     g_lua_pushcclosure_1013c984(L, &LuaApi_StoppedResources_1000f920, 0);
     g_lua_setfield_1013c9a4(L, -2, "StoppedResources");
     g_lua_pushcclosure_1013c984(L, &LuaApi_ShootBullet_1000fe90, 0);
@@ -576,15 +637,15 @@ static void __fastcall Hook_Client_10002ff0(void *thisPtr, void *edxUnused,
 /* #01 0x100047b0: __cdecl with 4 stack args (ret) — luaL_loadbuffer hook */
 static int __cdecl Hook_Client_100047b0(void *L, const char *buff, size_t sz, const char *name)
 {
+    PFN_Client_100047b0 orig = (PFN_Client_100047b0)g_ClientHooks_10005b80[1].origTrampoline;
+    if (orig && !g_LuaVmBridge.loadbuffer_1013c94c) {
+        g_LuaVmBridge.loadbuffer_1013c94c = (PFN_NrthLuaLoadBuffer)orig;
+    }
     RecordLuaVmAndRunPending(L, name);
     if (name && buff && sz > 0 && sz < 0xA00000u) {
         NrthUI_OnClientScriptLoaded(name, buff, sz);
     }
-    PFN_Client_100047b0 orig = (PFN_Client_100047b0)g_ClientHooks_10005b80[1].origTrampoline;
     if (orig) {
-        if (!g_LuaVmBridge.loadbuffer_1013c94c) {
-            g_LuaVmBridge.loadbuffer_1013c94c = (PFN_NrthLuaLoadBuffer)orig;
-        }
         return orig(L, buff, sz, name);
     }
     return 0;
@@ -915,66 +976,77 @@ static uintptr_t g_ClientResolvedOffsets[NRTH_CLIENT_RESOLVE_COUNT] = {0};
 
 extern "C" uint32_t ResolveClientOffsets_1000c390(const uint8_t *moduleBase, uint32_t moduleSize)
 {
-    static const uint32_t kC390CatalogSigIds[12] = {
-        4, 11, 14, 1, 9, 8, 12, 2, 17, 7, 20, 18
-    };
-    /* Exact 8 additional patterns decoded from 0x1000c400 in NRTH.dll (K=0xC0) */
-    static const char *const kC390ExtraPatterns[8] = {
+    /* Exact 20 pattern scans in Scan #00..#19 order decoded from 0x1000c400..0x1000d587 in NRTH.dll */
+    const char *scanPatterns[NRTH_CLIENT_RESOLVE_COUNT] = {
+        /* #00 0x1000c59e -> 0x1013c984 (lua_pushcclosure) */
+        DecryptCatalogSig(4),
+        /* #01 0x1000c66e -> 0x1013c9a4 (lua_setfield) */
+        DecryptCatalogSig(11),
+        /* #02 0x1000c73e -> 0x1013c990 (lua_gettop) */
+        DecryptCatalogSig(14),
+        /* #03 0x1000c80e -> 0x1013c980 (lua_tolstring) */
         "55 8B EC 56 FF 75 ? 8B 75 ? 56 E8 ? ? ? ? 8B C8",
+        /* #04 0x1000c99f -> 0x1013c9a0 (lua_createtable) */
         "55 8B EC 57 8B 7D ? 8B 4F ? 8B 41 ? 3B 41 ? 72 ? 57 E8 ? ? ? ? 83 C4 ? 56 FF 75 ? 8B 77 ? FF 75 ? 57 E8 ? ? ? ? ? ? 83 C4 ? C7 46 ? ? ? ? ? 8B 4F ? 8B 47 ? 5E 3B 41 ? 72 ? C7 05 ? ? ? ? ? ? ? ? 83 47 ? ? 5F 5D C3 ? ? ? ? ? ? ? ? ? ? ? ? 55 8B EC 8B 4D",
+        /* #05 0x1000cabe -> 0x1013c98c (lua_tonumber) */
+        DecryptCatalogSig(1),
+        /* #06 0x1000cba6 -> unused */
+        DecryptCatalogSig(9),
+        /* #07 0x1000cc82 -> 0x1013c988 (lua_type) */
+        DecryptCatalogSig(8),
+        /* #08 0x1000cd35 -> unused */
         "55 8B EC 56 57 FF 75 ? 8B 7D",
+        /* #09 0x1000cdd9 -> unused */
         "55 8B EC 83 EC ? 56 8B 75 ? 57 FF 75",
+        /* #10 0x1000ce7f -> 0x1013c974 (lua_pcall) */
+        DecryptCatalogSig(12),
+        /* #11 0x1000cf36 -> unused */
         "55 8B EC 8B 55 ? 8B 42 ? C7 40",
+        /* #12 0x1000d016 -> unused */
+        DecryptCatalogSig(2),
+        /* #13 0x1000d0ba -> 0x1013c99c (lua_settop) */
+        DecryptCatalogSig(17),
+        /* #14 0x1000d180 -> 0x1013c9a8 (lua_rawgeti) */
         "55 8B EC 57 FF 75 ? 8B 7D ? 57 E8 ? ? ? ? 83 C4 ? 83 78",
+        /* #15 0x1000d29e -> 0x1013c97c (lua_rawseti) */
         "55 8B EC 53 57 8B 7D ? 8B 47 ? 2B 47 ? 83 E0 ? 83 F8 ? 7D ? C7 05 ? ? ? ? ? ? ? ? FF 75 ? 57 E8 ? ? ? ? 8B D8 83 C4 ? 83 7B ? ? 74 ? C7 05 ? ? ? ? ? ? ? ? 56 FF 75",
+        /* #16 0x1000d367 -> 0x1013c978 (lua_objlen) */
+        DecryptCatalogSig(7),
+        /* #17 0x1000d41a -> unused */
+        DecryptCatalogSig(20),
+        /* #18 0x1000d4bb -> 0x1013c998 (lua_pushstring) */
+        DecryptCatalogSig(18),
+        /* #19 0x1000d571 -> 0x1013c994 (lua_pushnumber) */
         "55 8B EC 8B 55 ? F2 0F 10 45"
     };
 
     uint32_t resolved = 0;
     for (uint32_t i = 0; i < NRTH_CLIENT_RESOLVE_COUNT; ++i) {
-        const char *pat = (i < 12)
-                              ? DecryptCatalogSig(kC390CatalogSigIds[i])
-                              : kC390ExtraPatterns[i - 12];
-        const uint8_t *hit = ResolvePattern_10002960(moduleBase, moduleSize, pat);
+        const uint8_t *hit = ResolvePattern_10002960(moduleBase, moduleSize, scanPatterns[i]);
         g_ClientResolvedOffsets[i] = (uintptr_t)hit;
         if (hit) {
             ++resolved;
         }
     }
 
-    /* Populate the 14 Lua C API pointers (0x1013c974..0x1013c9a8) */
+    /* Populate the 14 Lua C API pointers (0x1013c974..0x1013c9a8) in exact 0x1000c5d3..0x1000d587 order */
     g_lua_pushcclosure_1013c984 = (PFN_lua_pushcclosure_t)g_ClientResolvedOffsets[0];
     g_lua_setfield_1013c9a4     = (PFN_lua_setfield_t)g_ClientResolvedOffsets[1];
     g_lua_gettop_1013c990       = (PFN_lua_gettop_t)g_ClientResolvedOffsets[2];
     g_lua_tolstring_1013c980    = (PFN_lua_tolstring_t)g_ClientResolvedOffsets[3];
-    g_lua_createtable_1013c9a0  = (PFN_lua_createtable_t)(g_ClientResolvedOffsets[4]
-                                      ? g_ClientResolvedOffsets[4]
-                                      : g_ClientResolvedOffsets[12]);
+    g_lua_createtable_1013c9a0  = (PFN_lua_createtable_t)g_ClientResolvedOffsets[4];
     g_lua_tonumber_1013c98c     = (PFN_lua_tonumber_t)g_ClientResolvedOffsets[5];
-    g_lua_type_1013c988         = (PFN_lua_type_t)(g_ClientResolvedOffsets[6]
-                                      ? g_ClientResolvedOffsets[6]
-                                      : g_ClientResolvedOffsets[7]);
-    uintptr_t pcallHit          = g_ClientResolvedOffsets[8]
-                                      ? g_ClientResolvedOffsets[8]
-                                      : (g_ClientResolvedOffsets[9]
-                                             ? g_ClientResolvedOffsets[9]
-                                             : (g_ClientResolvedOffsets[13]
-                                                    ? g_ClientResolvedOffsets[13]
-                                                    : g_ClientResolvedOffsets[6]));
-    g_lua_pcall_1013c974        = (PFN_lua_pcall_t)pcallHit;
-    if (pcallHit) {
-        g_LuaVmBridge.pcall_1013c974 = (PFN_NrthLuaPcall)pcallHit;
+    g_lua_type_1013c988         = (PFN_lua_type_t)g_ClientResolvedOffsets[7];
+    g_lua_pcall_1013c974        = (PFN_lua_pcall_t)g_ClientResolvedOffsets[10];
+    if (g_lua_pcall_1013c974) {
+        g_LuaVmBridge.pcall_1013c974 = (PFN_NrthLuaPcall)g_lua_pcall_1013c974;
     }
-    g_lua_getfield_1013c99c     = (PFN_lua_getfield_t)(g_ClientResolvedOffsets[14]
-                                      ? g_ClientResolvedOffsets[14]
-                                      : (g_ClientResolvedOffsets[15]
-                                             ? g_ClientResolvedOffsets[15]
-                                             : g_ClientResolvedOffsets[16]));
-    g_lua_settop_1013c9a8       = (PFN_lua_settop_t)g_ClientResolvedOffsets[10];
-    g_lua_pushnumber_1013c97c   = (PFN_lua_pushnumber_t)g_ClientResolvedOffsets[19];
-    g_lua_pushboolean_1013c978  = (PFN_lua_pushboolean_t)g_ClientResolvedOffsets[11];
-    g_lua_pushstring_1013c998   = (PFN_lua_pushstring_t)g_ClientResolvedOffsets[17];
-    g_lua_rawseti_1013c994      = (PFN_lua_rawseti_t)g_ClientResolvedOffsets[18];
+    g_lua_settop_1013c99c       = (PFN_lua_settop_t)g_ClientResolvedOffsets[13];
+    g_lua_rawgeti_1013c9a8      = (PFN_lua_rawgeti_t)g_ClientResolvedOffsets[14];
+    g_lua_rawseti_1013c97c      = (PFN_lua_rawseti_t)g_ClientResolvedOffsets[15];
+    g_lua_objlen_1013c978       = (PFN_lua_objlen_t)g_ClientResolvedOffsets[16];
+    g_lua_pushstring_1013c998   = (PFN_lua_pushstring_t)g_ClientResolvedOffsets[18];
+    g_lua_pushnumber_1013c994   = (PFN_lua_pushnumber_t)g_ClientResolvedOffsets[19];
 
     return resolved;
 }

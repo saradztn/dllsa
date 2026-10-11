@@ -274,6 +274,23 @@ int main(void)
                 cur += MaterializePattern(clientHooks[i].pattern, clientText + cur, 256) + 0x20;
             }
         }
+        static const char *const kExtraC400[8] = {
+            "55 8B EC 56 FF 75 ? 8B 75 ? 56 E8 ? ? ? ? 8B C8",
+            "55 8B EC 57 8B 7D ? 8B 4F ? 8B 41 ? 3B 41 ? 72 ? 57 E8 ? ? ? ? 83 C4 ? 56 FF 75 ? 8B 77 ? FF 75 ? 57 E8 ? ? ? ? ? ? 83 C4 ? C7 46 ? ? ? ? ? 8B 4F ? 8B 47 ? 5E 3B 41 ? 72 ? C7 05 ? ? ? ? ? ? ? ? 83 47 ? ? 5F 5D C3 ? ? ? ? ? ? ? ? ? ? ? ? 55 8B EC 8B 4D",
+            "55 8B EC 56 57 FF 75 ? 8B 7D",
+            "55 8B EC 83 EC ? 56 8B 75 ? 57 FF 75",
+            "55 8B EC 8B 55 ? 8B 42 ? C7 40",
+            "55 8B EC 57 FF 75 ? 8B 7D ? 57 E8 ? ? ? ? 83 C4 ? 83 78",
+            "55 8B EC 53 57 8B 7D ? 8B 47 ? 2B 47 ? 83 E0 ? 83 F8 ? 7D ? C7 05 ? ? ? ? ? ? ? ? FF 75 ? 57 E8 ? ? ? ? 8B D8 83 C4 ? 83 7B ? ? 74 ? C7 05 ? ? ? ? ? ? ? ? 56 FF 75",
+            "55 8B EC 8B 55 ? F2 0F 10 45"
+        };
+        uintptr_t expectedCreatetableOff = 0;
+        for (uint32_t i = 0; i < 8; ++i) {
+            if (i == 1) {
+                expectedCreatetableOff = cur;
+            }
+            cur += MaterializePattern(kExtraC400[i], clientText + cur, 256) + 0x20;
+        }
 
         uint8_t cleanClientPe[0x4400], armedClientPe[0x4400];
         BuildSyntheticPe32(cleanClientPe, sizeof(cleanClientPe), clientText, sizeof(clientText), NULL, 0);
@@ -297,9 +314,13 @@ int main(void)
         uint32_t cHooked   = ArmClient_10005b80(armedClientPe + 0x400, 0x2000, true);
         uint32_t cResolved = ResolveClientOffsets_1000c390(armedClientPe + 0x400, 0x2000);
         uint32_t nActions  = ArmNetc_10020640(armedNetcPe + 0x400, 0x2000, true, true);
+        uint32_t nResCount = 0;
+        const uintptr_t *resOffs = Nrth_GetClientResolvedOffsets(&nResCount);
 
-        CHECK(cHooked == 11 && cResolved >= 12 && nActions == 10,
-              "ArmClient_10005b80 (11 hooks), ResolveClientOffsets_1000c390, ArmNetc_10020640 (4 hooks + 6 patches)");
+        CHECK(cHooked == 11 && cResolved == 20 && nActions == 10 &&
+              resOffs[4] == (uintptr_t)(armedClientPe + 0x400 + expectedCreatetableOff) &&
+              resOffs[4] != resOffs[6],
+              "ArmClient_10005b80 (11 hooks), ResolveClientOffsets_1000c390 (20/20 ordered scans, lua_createtable != Sig #9), ArmNetc_10020640 (4 hooks + 6 patches)");
         CHECK(Nrth_GetTotalPatternScans() == 37,
               "Total pattern scans across 0x10005b80 (11) + 0x1000c390 (20) + 0x10020640 (6) == 37");
         CHECK(Nrth_GetTotalInstalledHooks() == 15 && (Nrth_GetTotalInstalledHooks() + 3) == 18,

@@ -21,37 +21,8 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "psapi.lib")
 
-// Active hook handles kept alive until loader exit so delayed game window startup
-// (e.g. MTA splash -> gta_sa.exe main window) still triggers WH_GETMESSAGE injection.
-static HHOOK   g_activeHooks[64] = { NULL };
-static int     g_activeHookCount = 0;
-static HMODULE g_localHookMod    = NULL;
-
-static void CleanupInstalledHooks(void) {
-    for (int i = 0; i < g_activeHookCount; ++i) {
-        if (g_activeHooks[i]) {
-            UnhookWindowsHookEx(g_activeHooks[i]);
-            g_activeHooks[i] = NULL;
-        }
-    }
-    g_activeHookCount = 0;
-    if (g_localHookMod) {
-        FreeLibrary(g_localHookMod);
-        g_localHookMod = NULL;
-    }
-}
-
-static bool AddThreadHook(int idHook, HOOKPROC pfn, HMODULE hMod, DWORD tid) {
-    if (!pfn || !hMod || tid == 0 || g_activeHookCount >= 64) {
-        return false;
-    }
-    HHOOK h = SetWindowsHookExA(idHook, pfn, hMod, tid);
-    if (h) {
-        g_activeHooks[g_activeHookCount++] = h;
-        return true;
-    }
-    return false;
-}
+// Note: MSVC CRT and mingw-w64's sec_api both provide strcpy_s/strcat_s natively;
+// call sites below use them directly (portable across both toolchains).
 
 // Enables SeDebugPrivilege in the current process token
 bool EnableDebugPrivilege() {
@@ -108,8 +79,8 @@ DWORD FindProcessByName(const char* exeName) {
     return pid;
 }
 
-// Finds all thread IDs belonging to a given PID (up to maxThreads)
-int FindThreadsInProcess(DWORD pid, DWORD* outTids, int maxThreads) {
+// Finds the first thread ID belonging to a given PID
+DWORD FindThreadInProcess(DWORD pid) {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (hSnap == INVALID_HANDLE_VALUE) {
         return 0;
@@ -118,41 +89,18 @@ int FindThreadsInProcess(DWORD pid, DWORD* outTids, int maxThreads) {
     THREADENTRY32 te;
     te.dwSize = sizeof(THREADENTRY32);
 
-    int count = 0;
+    DWORD tid = 0;
     if (Thread32First(hSnap, &te)) {
         do {
             if (te.th32OwnerProcessID == pid) {
-                if (count < maxThreads) {
-                    outTids[count++] = te.th32ThreadID;
-                }
+                tid = te.th32ThreadID;
+                break;
             }
         } while (Thread32Next(hSnap, &te));
     }
 
     CloseHandle(hSnap);
-    return count;
-}
-
-struct FindWndCtx {
-    DWORD pid;
-    HWND  hwnd;
-    DWORD tid;
-};
-
-static BOOL CALLBACK EnumProcessWindowsProc(HWND hwnd, LPARAM lParam) {
-    FindWndCtx* ctx = (FindWndCtx*)lParam;
-    DWORD wPid = 0;
-    DWORD wTid = GetWindowThreadProcessId(hwnd, &wPid);
-    if (wPid == ctx->pid && wTid != 0) {
-        if (!ctx->hwnd || IsWindowVisible(hwnd)) {
-            ctx->hwnd = hwnd;
-            ctx->tid  = wTid;
-            if (IsWindowVisible(hwnd)) {
-                return FALSE;
-            }
-        }
-    }
-    return TRUE;
+    return tid;
 }
 
 // Helper struct and functions to map RVAs to file offsets in an unmapped PE image
@@ -169,8 +117,7 @@ void InitPeSectionMapper(struct SectionMapper* mapper, WORD numSections, IMAGE_S
 DWORD rva2off(struct SectionMapper* mapper, DWORD rva) {
     for (WORD i = 0; i < mapper->numberOfSections; i++) {
         IMAGE_SECTION_HEADER* sec = &mapper->sections[i];
-        DWORD span = sec->Misc.VirtualSize ? sec->Misc.VirtualSize : sec->SizeOfRawData;
-        if (rva >= sec->VirtualAddress && rva < sec->VirtualAddress + span) {
+        if (rva >= sec->VirtualAddress && rva < sec->VirtualAddress + sec->Misc.VirtualSize) {
             return (rva - sec->VirtualAddress) + sec->PointerToRawData;
         }
     }
@@ -242,13 +189,6 @@ bool FindExportRvaInFile(const char* dllPath, const char* exportName, DWORD* out
                         }
                     }
                 }
-                if (!found && funcsOff && expDir->NumberOfFunctions >= 1) {
-                    DWORD* funcRvas = (DWORD*)(pBase + funcsOff);
-                    if (funcRvas[0] != 0) {
-                        *outRva = funcRvas[0];
-                        found = true;
-                    }
-                }
             }
         }
     }
@@ -291,44 +231,32 @@ bool IsModuleLoadedInProcess(DWORD pid, const char* moduleName) {
 }
 
 // Classic injection method via CreateRemoteThread & LoadLibraryA
-// Returns 0 on success, 1 on generic failure, 2 on access denied (protected process)
+// Returns 0 on success, 1 on generic failure, 2 on access denied
 int InjectClassic(DWORD pid, const char* dllPath) {
     DWORD desiredAccess = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                           PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
     HANDLE hProc = OpenProcess(desiredAccess, FALSE, pid);
     if (!hProc) {
         DWORD err = GetLastError();
-        if (err == ERROR_ACCESS_DENIED) {
-            printf("\n");
-            return 2;
-        }
         printf("[!] OpenProcess fallo (%lu).\n", err);
-        return 1;
+        return (err == ERROR_ACCESS_DENIED) ? 2 : 1;
     }
 
     size_t pathLen = strlen(dllPath) + 1;
     LPVOID pRemoteBuf = VirtualAllocEx(hProc, NULL, pathLen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!pRemoteBuf) {
         DWORD err = GetLastError();
-        CloseHandle(hProc);
-        if (err == ERROR_ACCESS_DENIED) {
-            printf("\n");
-            return 2;
-        }
         printf("[!] VirtualAllocEx fallo (%lu)\n", err);
-        return 1;
+        CloseHandle(hProc);
+        return (err == ERROR_ACCESS_DENIED) ? 2 : 1;
     }
 
     if (!WriteProcessMemory(hProc, pRemoteBuf, dllPath, pathLen, NULL)) {
         DWORD err = GetLastError();
+        printf("[!] WriteProcessMemory fallo (%lu)\n", err);
         VirtualFreeEx(hProc, pRemoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProc);
-        if (err == ERROR_ACCESS_DENIED) {
-            printf("\n");
-            return 2;
-        }
-        printf("[!] WriteProcessMemory fallo (%lu)\n", err);
-        return 1;
+        return (err == ERROR_ACCESS_DENIED) ? 2 : 1;
     }
 
     HMODULE hKernel = GetModuleHandleA("kernel32.dll");
@@ -343,14 +271,10 @@ int InjectClassic(DWORD pid, const char* dllPath) {
     HANDLE hThread = CreateRemoteThread(hProc, NULL, 0, (LPTHREAD_START_ROUTINE)pLoadLib, pRemoteBuf, 0, NULL);
     if (!hThread) {
         DWORD err = GetLastError();
+        printf("[!] CreateRemoteThread fallo (%lu)\n", err);
         VirtualFreeEx(hProc, pRemoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProc);
-        if (err == ERROR_ACCESS_DENIED) {
-            printf("\n");
-            return 2;
-        }
-        printf("[!] CreateRemoteThread fallo (%lu)\n", err);
-        return 1;
+        return (err == ERROR_ACCESS_DENIED) ? 2 : 1;
     }
 
     DWORD remoteMod = 0;
@@ -373,109 +297,68 @@ int InjectClassic(DWORD pid, const char* dllPath) {
 
 // Hook injection method via SetWindowsHookEx (WH_GETMESSAGE) & NVXHookProc
 bool InjectHook(DWORD pid, const char* dllPath) {
-    DWORD rva = 0;
-    if (!FindExportRvaInFile(dllPath, "NVXHookProc", &rva)) {
-        FindExportRvaInFile(dllPath, "NVXHookProc@12", &rva);
-    }
-
-    HMODULE hMod = LoadLibraryExA(dllPath, NULL, DONT_RESOLVE_DLL_REFERENCES);
-    if (!hMod) {
-        hMod = LoadLibraryA(dllPath);
-    }
-    if (!hMod) {
-        printf("[!] Mapeo sin ejecutar fallo (%lu)\n", GetLastError());
-        return false;
-    }
-    g_localHookMod = hMod;
-
+    HMODULE hMod = LoadLibraryA(dllPath);
     HOOKPROC pfn = NULL;
-    if (rva != 0) {
-        pfn = (HOOKPROC)((BYTE*)hMod + rva);
-    } else {
+
+    if (hMod != NULL) {
         pfn = (HOOKPROC)GetProcAddress(hMod, "NVXHookProc");
-        if (!pfn) pfn = (HOOKPROC)GetProcAddress(hMod, "NVXHookProc@12");
-        if (!pfn) pfn = (HOOKPROC)GetProcAddress(hMod, MAKEINTRESOURCEA(1));
-        if (pfn) {
-            rva = (DWORD)((BYTE*)pfn - (BYTE*)hMod);
-        }
-    }
-
-    if (!pfn || rva == 0) {
-        printf("[!] No se hallo el export NVXHookProc en el archivo.\n");
-        CleanupInstalledHooks();
-        return false;
-    }
-
-    printf("[*] Export NVXHookProc en RVA 0x%08lX\n", (unsigned long)rva);
-
-    DWORD tids[32] = { 0 };
-    int nTids = FindThreadsInProcess(pid, tids, 32);
-    if (nTids == 0) {
-        printf("[!] No se hallo hilo en el proceso.\n");
-        CleanupInstalledHooks();
-        return false;
-    }
-
-    for (int i = 0; i < nTids; ++i) {
-        AddThreadHook(WH_GETMESSAGE, pfn, hMod, tids[i]);
-        AddThreadHook(WH_CALLWNDPROC, pfn, hMod, tids[i]);
-    }
-
-    if (g_activeHookCount == 0) {
-        HHOOK hGlobal = SetWindowsHookExA(WH_GETMESSAGE, pfn, hMod, 0);
-        if (!hGlobal) {
-            printf("[!] SetWindowsHookEx fallo (%lu)\n", GetLastError());
-            CleanupInstalledHooks();
+        if (!pfn) {
+            printf("[!] El DLL no exporta NVXHookProc (usa el NRTH.dll recien compilado).\n");
+            FreeLibrary(hMod);
             return false;
         }
-        g_activeHooks[g_activeHookCount++] = hGlobal;
+    } else {
+        printf("[*] LoadLibrary local fallo (%lu); mapeando sin ejecutar...\n", GetLastError());
+        DWORD rva = 0;
+        if (!FindExportRvaInFile(dllPath, "NVXHookProc", &rva)) {
+            printf("[!] No se hallo el export NVXHookProc en el archivo.\n");
+            return false;
+        }
+
+        hMod = LoadLibraryExA(dllPath, NULL, DONT_RESOLVE_DLL_REFERENCES);
+        if (!hMod) {
+            printf("[!] Mapeo sin ejecutar fallo (%lu)\n", GetLastError());
+            return false;
+        }
+
+        pfn = (HOOKPROC)((BYTE*)hMod + rva);
+        printf("[*] Export NVXHookProc en RVA 0x%08lX\n", rva);
+    }
+
+    DWORD threadId = FindThreadInProcess(pid);
+    if (threadId == 0) {
+        printf("[!] No se hallo hilo en el proceso.\n");
+        FreeLibrary(hMod);
+        return false;
+    }
+
+    HHOOK hHook = SetWindowsHookExA(WH_GETMESSAGE, pfn, hMod, threadId);
+    if (!hHook) {
+        printf("[!] SetWindowsHookEx fallo (%lu)\n", GetLastError());
+        FreeLibrary(hMod);
+        return false;
     }
 
     printf("[*] Hook instalado, despertando el hilo del juego...\n");
+    for (int i = 0; i < 10; i++) {
+        PostThreadMessageA(threadId, WM_NULL, 0, 0);
+        Sleep(200);
+    }
+    Sleep(500);
+
+    UnhookWindowsHookEx(hHook);
+    FreeLibrary(hMod);
 
     const char* filename = strrchr(dllPath, '\\');
     filename = filename ? filename + 1 : dllPath;
 
-    DWORD hookedWinTid = 0;
-    int   windowWakeTicks = 0;
-
-    // Wait for the game window to appear and pump messages so WH_GETMESSAGE maps NRTH.dll
-    for (int step = 0; step < 150; ++step) {
-        FindWndCtx ctx = { pid, NULL, 0 };
-        EnumWindows(EnumProcessWindowsProc, (LPARAM)&ctx);
-
-        if (ctx.tid != 0 && ctx.tid != hookedWinTid) {
-            hookedWinTid = ctx.tid;
-            AddThreadHook(WH_GETMESSAGE, pfn, hMod, ctx.tid);
-            AddThreadHook(WH_CALLWNDPROC, pfn, hMod, ctx.tid);
-        }
-
-        int curTids = FindThreadsInProcess(pid, tids, 32);
-        for (int i = 0; i < curTids; ++i) {
-            PostThreadMessageA(tids[i], WM_NULL, 0, 0);
-        }
-
-        if (ctx.hwnd) {
-            PostThreadMessageA(ctx.tid, WM_NULL, 0, 0);
-            PostMessageA(ctx.hwnd, WM_NULL, 0, 0);
-            SendNotifyMessageA(ctx.hwnd, WM_NULL, 0, 0);
-            ++windowWakeTicks;
-        }
-
-        if (IsModuleLoadedInProcess(pid, filename)) {
-            printf("[+] Inyectado OK por hook (modulo verificado en el proceso).\n");
-            return true;
-        }
-
-        if (windowWakeTicks >= 25) {
-            break;
-        }
-
-        Sleep(100);
+    if (IsModuleLoadedInProcess(pid, filename)) {
+        printf("[+] Inyectado OK por hook (modulo verificado en el proceso).\n");
+        return true;
+    } else {
+        printf("[*] Hook completado. Entra al juego y pulsa INSERT: si sale el menu, quedo.\n");
+        return true;
     }
-
-    printf("[*] Hook completado. Entra al juego y pulsa INSERT: si sale el menu, quedo.\n");
-    return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -567,6 +450,5 @@ int main(int argc, char* argv[]) {
         getchar();
     }
 
-    CleanupInstalledHooks();
     return ok ? 0 : 1;
 }
