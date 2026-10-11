@@ -847,6 +847,57 @@ int main(void)
 #endif /* NRTH_UI_HEADLESS */
     }
 
+    /* 13. CSX full-RE parity: recovered key, decryptor, payload signatures */
+    {
+        /* 13a. the recovered XOR-16 key is embedded in nrth_csx.h and matches
+         * the known-plaintext derivation from the container header + DOS hdr */
+        {
+            static const uint8_t cont[16] = {
+                0x0E,0x6F,0xE8,0x7E,0x50,0x74,0x65,0x61,
+                0x68,0x74,0x68,0x21,0xCD,0xCF,0x32,0x36
+            };
+            static const uint8_t dos[16] = {
+                0x4D,0x5A,0x90,0x00,0x03,0x00,0x00,0x00,
+                0x04,0x00,0x00,0x00,0xFF,0xFF,0x00,0x00
+            };
+            uint8_t dec[16];
+            memcpy(dec, cont, 16);
+            NrthCsx_DecryptXor16(dec, 16);
+            CHECK(memcmp(dec, dos, 16) == 0,
+                  "csx-re: XOR16 decryptor turns the container header into a DOS header");
+            CHECK(strcmp(NRTH_CSX_XOR_KEY, "C5x~Stealth!2026") == 0,
+                  "csx-re: recovered key 'C5x~Stealth!2026' (VA 0x4463FC) embedded");
+        }
+        /* 13b. decryptor on a synthetic encrypted PE: MZ hidden then restored */
+        {
+            static const char *plain = "MZ\x90\x00 DARKANARCHY csx-re synthetic payload";
+            uint8_t buf[64];
+            const size_t n = strlen(plain);
+            memcpy(buf, plain, n);
+            NrthCsx_DecryptXor16(buf, n);   /* symmetric: encrypt */
+            CHECK(!(buf[0] == 'M' && buf[1] == 'Z'), "csx-re: encrypted form hides MZ");
+            NrthCsx_DecryptXor16(buf, n);   /* decrypt back */
+            CHECK(memcmp(buf, plain, n) == 0, "csx-re: decryptor round-trips the payload");
+        }
+        /* 13c. decrypted-payload signature coverage in the scanner table */
+        {
+            const char *synthetic =
+                "csxcheat.dll log: [SILENTAIM] SendBulletSyncFire hooked ; "
+                "[ANTISCREEN] Server screenshot blocked! ; triggerbot "
+                "[TRIGGER] Block list is full (64) ; discord scope_v3.json ; "
+                "agent csxagent.pdb";
+            const uint32_t f = NrthCsx_ScanSignatures((const uint8_t *)synthetic,
+                                                      strlen(synthetic));
+            CHECK((f & (1u << 0)) && (f & (1u << 7)) && (f & (1u << 8)) &&
+                  (f & (1u << 9)) && (f & (1u << 10)) && (f & (1u << 11)),
+                  "csx-re: scanner flags all decrypted-payload capability sigs");
+            const uint32_t k = NrthCsx_ScanSignatures((const uint8_t *)"x C5x~Stealth!2026 y", 21);
+            CHECK((k & (1u << 3)) != 0, "csx-re: embedded XOR key is itself detectable");
+        }
+        /* 13d. signature table size parity */
+        CHECK(NRTH_CSX_SIG_COUNT == 13, "csx-re: signature table has 13 evidence sigs");
+    }
+
     printf("---------------------------------------------------\n");
     printf("Summary: %d passed, %d failed\n", g_passed, g_failed);
     return (g_failed == 0) ? 0 : 1;

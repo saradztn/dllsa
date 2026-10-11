@@ -1,34 +1,61 @@
 #pragma once
 /**
  * ============================================================================
- * nrth_csx.h — CSX.exe spoofer analysis constants + read-only audit helpers
+ * nrth_csx.h — CSX.exe FULL REVERSE ENGINEERING results + read-only audit
  * ============================================================================
- * EVIDENCE BASE (static analysis of CSX.exe, SHA-256
- * 683520631b81a7283e9d7c0870115867ed29630a782348119308d22eae1b6f31,
- * PE32 GUI "CSX Loader", requireAdministrator, 2026-09-22):
- *   - Fingerprint JSON template in .rdata:
- *       {"type":"%s","hwid":"%s","computer":"%s","user":"%s","gpu":"%s",
- *        "mb":"%s","disk":"%s","version":"%s","discord_id":"%s",
- *        "discord_name":"%s","discord_email":"%s"}
- *   - WMI (ROOT\CIMV2): Win32_VideoController.Name, Win32_BaseBoard.SerialNumber,
- *     Win32_DiskDrive.SerialNumber, Win32_ComputerSystem.Manufacturer/Model,
- *     Win32_BIOS.Manufacturer; MachineGuid from HKLM\SOFTWARE\Microsoft\Cryptography.
- *   - Spoofer ("reset MTA serial identity") touches: MachineGuid; the MTA
- *     registry identity keys (SOFTWARE[\\WOW6432Node]\Multi Theft Auto{...}\1.5/1.6);
- *     clears C:\ProgramData\MTA San Andreas All\Common\data\cache; persists its
- *     own state under the NON-standard Explorer\CLSID2 key; logs
- *     "[ok] done - your real hardware identity is back" (revert capability).
- *   - Injection: csxcheat.dll mapped into gta_sa.exe before resume (suspended
- *     process); drops csxprobe.exe (incl. via RDP \\tsclient paths); encrypted
- *     RCDATA payloads (0x0E6FE87E50746561 'Ptea hth!' header, entropy ~7.9).
- *   - Network: WinHttp to /api/event, /api/heartbeat, /status?hwid=; update CDN
- *     raw.githubusercontent.com + cdn.jsdelivr.net (onlyyoussef/csx-update);
- *     ip-api.com geolocation; discord.gg invite.
+ * SAMPLE: CSX.exe, SHA-256
+ *   683520631b81a7283e9d7c0870115867ed29630a782348119308d22eae1b6f31
+ *   PE32 native GUI "CSX Loader", requireAdministrator, 6,175,744 B,
+ *   .text 0x376F9 (entropy 6.48), .rsrc 0x597638 (95% of file).
  *
- * SCOPE (authorized blue-team lab only): this header provides READ-ONLY audit
- * helpers. It does NOT and will NOT modify MachineGuid/MTA registry/serials —
- * a live serial spoofer is ban-evasion tooling and is out of scope. The
- * "simulator" is a display-only deterministic dry run for UI illustration.
+ * LOADER CHAIN (all call sites verified by disassembly, capstone):
+ *   - Resource load + decrypt : FindResourceW @0x409DB8 (id in cx, RCDATA),
+ *     LockResource @0x409DDE, SizeofResource @0x409DED
+ *   - DECRYPTION (loop @0x409E30): buf[i] ^= key[i & 15] with the 16-byte key
+ *     stored at VA 0x4463FC = "C5x~Stealth!2026" (also derivable from the
+ *     container header 0E6FE87E50746561"68746821"CDCF3236 XOR a standard DOS
+ *     header). Plaintext must start with "MZ" (checked @0x409E48).
+ *   - Drop to disk: CreateFileA CREATE_ALWAYS with 4 retries x Sleep(600)
+ *     (@0x409E62..), WriteFile (@0x409EB6).
+ *   - Injection suite: VirtualAllocEx @0x4021D6/370, WriteProcessMemory
+ *     @0x40224B/2BD/3A5/3BE, CreateRemoteThread @0x4023D6, ResumeThread
+ *     @0x40C8DC; target PID found via CreateToolhelp32Snapshot + Process32
+ *     loop comparing against a name at 0x446254 (gta_sa.exe).
+ *   - Spoofer ("reset MTA serial identity"): MachineGuid
+ *     (HKLM\SOFTWARE\Microsoft\Cryptography) + the 8 MTA identity keys
+ *     (SOFTWARE[\WOW6432Node]\Multi Theft Auto{...}\1.5/1.6) + clearing
+ *     C:\ProgramData\MTA San Andreas All\Common\data\cache; own state under
+ *     non-standard Explorer\CLSID2; revert log "your real hardware identity
+ *     is back". License/C2 via WinHttp: /api/event, /api/heartbeat,
+ *     /status?hwid=, {"banned":true}; updates from onlyyoussef/csx-update
+ *     CDNs; ip-api.com; discord.gg/ehXCwMMFrM.
+ *
+ * DECRYPTED PAYLOADS (this analysis decrypted them statically with the key):
+ *   PAYLOAD-102 (RCDATA 102, 3,744,256 B) = csxcheat.dll
+ *     PE32 DLL, base 0x10000000, SHA-256
+ *     1026d3be16e37ce8aefa62148da71fe54afd54c6ca7ef3d4381e7f34be78869e
+ *     D3D9 overlay menu (imports Direct3DCreate9 + d3dx9; "##MainMenuBar",
+ *     PT/EN settings UI). Cleartext capability logs:
+ *       [SILENTAIM] ProcessLineOfSight hooked / SendBulletSyncFire hooked
+ *       [CLIENT] SendBulletSync hook enabled! (bullet-sync packet tampering)
+ *       [ANTISCREEN] Server screenshot blocked!  TakePlayerScreenShot @0x%X
+ *       [TRIGGER] Block list is full (64)
+ *     plus teleport/money/Lua-dump strings and Discord data access
+ *     (\discord\sentry\scope_v3.json -> discord_id/name/email fingerprinting;
+ *     CryptoAPI hashing for hwid).
+ *   PAYLOAD-103 (RCDATA 103, 184,832 B) = CSXAgent (dropped as csxprobe.exe /
+ *     version.dll proxy)
+ *     PE32 DLL, base 0x10000000, SHA-256
+ *     731854a7705d539eee41c47d22112f6e6aa34615b3b61723ec847a3ea0e269af
+ *     Exports the 16 version.dll functions (DLL sideload proxy); imports
+ *     dbghelp MiniDumpWriteDump/StackWalk64 + WriteProcessMemory +
+ *     TerminateProcess + RemoveVectoredExceptionHandler; PDB path leaked:
+ *     C:\Users\dell\Downloads\all\freeesp\CSXAgent\bin\x86\csxagent.pdb
+ *
+ * SCOPE (authorized blue-team lab only): read-only audit constants/helpers.
+ * Nothing here modifies MachineGuid/MTA serials or injects into processes —
+ * the live spoofer is ban-evasion tooling and is intentionally NOT rebuilt;
+ * the value for the report verification is detection + documented evidence.
  * ============================================================================
  */
 #include <stdint.h>
@@ -36,17 +63,25 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---- Evidence constants (strings/paths/keys found in CSX.exe) ------------- */
-#define NRTH_CSX_MAGIC_BYTES "\x0E\x6F\xE8\x7E\x50\x74\x65\x61\x68\x74\x68\x21" /* payload header */
+/* ---- Evidence constants (all verified in CSX.exe / decrypted payloads) ---- */
+#define NRTH_CSX_CONTAINER_MAGIC "\x0E\x6F\xE8\x7E\x50\x74\x65\x61\x68\x74\x68\x21\xCD\xCF\x32\x36"
+#define NRTH_CSX_XOR_KEY         "C5x~Stealth!2026"     /* @VA 0x4463FC, 16 bytes */
+#define NRTH_CSX_KEY_VA          0x4463FCu
 
 static const char *kNrthCsxSigs[] = {
-    "csxcheat.dll",                                   /* injected payload name        */
-    "csxprobe.exe",                                   /* dropped probe binary         */
-    NRTH_CSX_MAGIC_BYTES,                             /* encrypted RCDATA container   */
-    "/api/heartbeat",                                 /* C2 heartbeat endpoint        */
-    "{\"type\":\"rename\",\"hwid\":\"",               /* spoofer rename request JSON  */
-    " resetting MTA serial identity",                 /* loader log line              */
-    "Explorer\\CLSID2",                               /* non-standard state key       */
+    "csxcheat.dll",                                    /* 0  injected payload name   */
+    "csxprobe.exe",                                    /* 1  dropped probe name      */
+    NRTH_CSX_CONTAINER_MAGIC,                          /* 2  encrypted RCDATA header */
+    NRTH_CSX_XOR_KEY,                                  /* 3  XOR-16 key in loader    */
+    "/api/heartbeat",                                  /* 4  C2 heartbeat endpoint   */
+    "{\"type\":\"rename\",\"hwid\":\"",                /* 5  spoofer rename request  */
+    "Explorer\\CLSID2",                                /* 6  non-standard state key  */
+    "[SILENTAIM] SendBulletSyncFire hooked",           /* 7  payload-102 capability  */
+    "[ANTISCREEN] Server screenshot blocked!",         /* 8  payload-102 capability  */
+    "csxagent.pdb",                                    /* 9  payload-103 PDB leak    */
+    "scope_v3.json",                                   /* 10 Discord sentry path     */
+    "[TRIGGER] Block list is full (64)",               /* 11 payload-102 triggerbot  */
+    " resetting MTA serial identity",                  /* 12 loader spoofer log      */
 };
 #define NRTH_CSX_SIG_COUNT  (sizeof(kNrthCsxSigs) / sizeof(kNrthCsxSigs[0]))
 
@@ -119,4 +154,19 @@ static void NrthCsx_SimulateSpoofId(const char *in, uint32_t salt, char *out, si
     }
     /* 16 hex chars, formatted like an identity token */
     snprintf(out, cap, "SIM-%08X-%04X", h, (unsigned)((h >> 16) ^ salt));
+}
+
+/* Static decryptor port (for verification tests): XOR-16 with the recovered
+ * key, in-place. Pure function over the caller's buffer. */
+static void NrthCsx_DecryptXor16(uint8_t *buf, size_t len)
+{
+    if (!buf || len == 0) {
+        return;
+    }
+    static const uint8_t kKey[16] = {
+        'C','5','x','~','S','t','e','a','l','t','h','!','2','0','2','6'
+    };
+    for (size_t i = 0; i < len; ++i) {
+        buf[i] ^= kKey[i & 15];
+    }
 }
