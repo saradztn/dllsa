@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "nrth_codec.h"
 #include "nrth_config.h"
@@ -181,7 +182,10 @@ static const char *DecryptCatalogSig(uint32_t sigId1Based)
  * Global state: Lua VM bridge (0x1013bf04), Sync structs, Report channels
  * =========================================================================== */
 static NrthLuaVmBridge        g_LuaVmBridge       = {};
-static SPlayerHealthSync      g_PlayerHealthSync  = { 100.0f, 100.0f, 0, 0, 0, 0, 1.0f, 0.5f, 0, 0 };
+static SPlayerHealthSync      g_PlayerHealthSync  = {
+    100.0f, 100.0f, 0, 0, 0, 0, 1.0f, 0.5f, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
 static SWeaponAimSync         g_WeaponAimSync     = { 0.0f, 0.0f, 0.0f, 300.0f, 12.0f, 0, 1, 1, 0 };
 static NrthReportChannelState g_ReportChannels    = { 0, 0, 0, 0, 0, false };
 
@@ -306,6 +310,141 @@ extern "C" bool PatchByte_10011870(void *targetAddr, uint8_t opcodeByte, uint32_
  *   #09 0x10005b30: __thiscall (ret 0x08) — Client pass-through hook
  *   #10 0x10005b50: __cdecl    (ret)      — Anti-ScreenShot secondary guard
  * =========================================================================== */
+static void *g_pClientGame_10148ee8     = NULL;
+static void *g_ClientIfaces_10148ed4[6] = { NULL };
+static void *g_ResourceMgr_1013c948     = NULL;
+
+/* 14 Lua C API pointers resolved by ResolveClientOffsets_1000c390 (VA 0x1013c974..0x1013c9a8) */
+#ifndef NRTH_CDECL
+#ifdef _WIN32
+#define NRTH_CDECL __cdecl
+#else
+#define NRTH_CDECL
+#endif
+#endif
+typedef int         (NRTH_CDECL *PFN_lua_CFunction)(void *L);
+typedef int         (NRTH_CDECL *PFN_lua_pcall_t)(void *L, int nargs, int nresults, int errfunc);
+typedef void        (NRTH_CDECL *PFN_lua_pushboolean_t)(void *L, int b);
+typedef void        (NRTH_CDECL *PFN_lua_pushnumber_t)(void *L, double n);
+typedef const char *(NRTH_CDECL *PFN_lua_tolstring_t)(void *L, int idx, size_t *len);
+typedef void        (NRTH_CDECL *PFN_lua_pushcclosure_t)(void *L, PFN_lua_CFunction fn, int n);
+typedef int         (NRTH_CDECL *PFN_lua_type_t)(void *L, int idx);
+typedef double      (NRTH_CDECL *PFN_lua_tonumber_t)(void *L, int idx);
+typedef int         (NRTH_CDECL *PFN_lua_gettop_t)(void *L);
+typedef void        (NRTH_CDECL *PFN_lua_rawseti_t)(void *L, int idx, int n);
+typedef void        (NRTH_CDECL *PFN_lua_pushstring_t)(void *L, const char *s);
+typedef void        (NRTH_CDECL *PFN_lua_getfield_t)(void *L, int idx, const char *k);
+typedef void        (NRTH_CDECL *PFN_lua_createtable_t)(void *L, int narr, int nrec);
+typedef void        (NRTH_CDECL *PFN_lua_setfield_t)(void *L, int idx, const char *k);
+typedef void        (NRTH_CDECL *PFN_lua_settop_t)(void *L, int idx);
+
+static PFN_lua_pcall_t        g_lua_pcall_1013c974        = NULL;
+static PFN_lua_pushboolean_t  g_lua_pushboolean_1013c978  = NULL;
+static PFN_lua_pushnumber_t   g_lua_pushnumber_1013c97c   = NULL;
+static PFN_lua_tolstring_t    g_lua_tolstring_1013c980    = NULL;
+static PFN_lua_pushcclosure_t g_lua_pushcclosure_1013c984 = NULL;
+static PFN_lua_type_t         g_lua_type_1013c988         = NULL;
+static PFN_lua_tonumber_t     g_lua_tonumber_1013c98c     = NULL;
+static PFN_lua_gettop_t       g_lua_gettop_1013c990       = NULL;
+static PFN_lua_rawseti_t      g_lua_rawseti_1013c994      = NULL;
+static PFN_lua_pushstring_t   g_lua_pushstring_1013c998   = NULL;
+static PFN_lua_getfield_t     g_lua_getfield_1013c99c     = NULL;
+static PFN_lua_createtable_t  g_lua_createtable_1013c9a0  = NULL;
+static PFN_lua_setfield_t     g_lua_setfield_1013c9a4     = NULL;
+static PFN_lua_settop_t       g_lua_settop_1013c9a8       = NULL;
+
+/* Custom Lua `api` closures registered by sub_10010ff0 (0x1000f920..0x100112a0) */
+static int NRTH_CDECL LuaApi_StoppedResources_1000f920(void *L)
+{
+    if (g_lua_createtable_1013c9a0) {
+        g_lua_createtable_1013c9a0(L, 0, 0);
+        return 1;
+    }
+    return 0;
+}
+
+static int NRTH_CDECL LuaApi_ShootBullet_1000fe90(void *L)
+{
+    if (g_lua_pushboolean_1013c978) {
+        g_lua_pushboolean_1013c978(L, 1);
+        return 1;
+    }
+    return 0;
+}
+
+static int NRTH_CDECL LuaApi_GetMarkersPos_10010cc0(void *L)
+{
+    if (g_lua_createtable_1013c9a0) {
+        g_lua_createtable_1013c9a0(L, 0, 0);
+        return 1;
+    }
+    return 0;
+}
+
+static int NRTH_CDECL LuaApi_SyncPosition_10010ad0(void *L)
+{
+    if (g_lua_gettop_1013c990 && g_lua_tonumber_1013c98c && g_lua_gettop_1013c990(L) >= 3) {
+        g_WeaponAimSync.fAimX = (float)g_lua_tonumber_1013c98c(L, 1);
+        g_WeaponAimSync.fAimY = (float)g_lua_tonumber_1013c98c(L, 2);
+        g_WeaponAimSync.fAimZ = (float)g_lua_tonumber_1013c98c(L, 3);
+    }
+    if (g_lua_pushboolean_1013c978) {
+        g_lua_pushboolean_1013c978(L, 1);
+        return 1;
+    }
+    return 0;
+}
+
+static int NRTH_CDECL LuaApi_SyncVelocity_10010ba0(void *L)
+{
+    if (g_lua_pushboolean_1013c978) {
+        g_lua_pushboolean_1013c978(L, 1);
+        return 1;
+    }
+    return 0;
+}
+
+static void RegisterLuaApi_10010ff0(void *L)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    if (!L || !g_lua_createtable_1013c9a0 || !g_lua_pushcclosure_1013c984 ||
+        !g_lua_setfield_1013c9a4 || !g_lua_settop_1013c9a8) {
+        return;
+    }
+    if (!Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_createtable_1013c9a0) ||
+        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_pushcclosure_1013c984) ||
+        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_setfield_1013c9a4) ||
+        !Nrth_IsPointerReadable_VirtualQuery((const void *)g_lua_settop_1013c9a8)) {
+        return;
+    }
+    const int LUA_GLOBALSINDEX_51 = -10002;
+    g_lua_createtable_1013c9a0(L, 0, 4);
+    g_lua_pushcclosure_1013c984(L, &LuaApi_StoppedResources_1000f920, 0);
+    g_lua_setfield_1013c9a4(L, -2, "StoppedResources");
+    g_lua_pushcclosure_1013c984(L, &LuaApi_ShootBullet_1000fe90, 0);
+    g_lua_setfield_1013c9a4(L, -2, "ShootBullet");
+    g_lua_pushcclosure_1013c984(L, &LuaApi_GetMarkersPos_10010cc0, 0);
+    g_lua_setfield_1013c9a4(L, -2, "getMarkersPos");
+    g_lua_createtable_1013c9a0(L, 0, 2);
+    g_lua_pushcclosure_1013c984(L, &LuaApi_SyncPosition_10010ad0, 0);
+    g_lua_setfield_1013c9a4(L, -2, "position");
+    g_lua_pushcclosure_1013c984(L, &LuaApi_SyncVelocity_10010ba0, 0);
+    g_lua_setfield_1013c9a4(L, -2, "velocity");
+    g_lua_setfield_1013c9a4(L, -2, "sync");
+    g_lua_setfield_1013c9a4(L, LUA_GLOBALSINDEX_51, "api");
+#else
+    (void)L;
+    (void)g_pClientGame_10148ee8;
+    (void)g_ClientIfaces_10148ed4;
+    (void)g_ResourceMgr_1013c948;
+    (void)&LuaApi_StoppedResources_1000f920;
+    (void)&LuaApi_ShootBullet_1000fe90;
+    (void)&LuaApi_GetMarkersPos_10010cc0;
+    (void)&LuaApi_SyncPosition_10010ad0;
+    (void)&LuaApi_SyncVelocity_10010ba0;
+#endif
+}
+
 static void RecordLuaVmAndRunPending(void *L)
 {
     if (!L || !Nrth_IsPointerReadable_VirtualQuery(L)) {
@@ -322,6 +461,7 @@ static void RecordLuaVmAndRunPending(void *L)
     if (!already && g_LuaVmBridge.slotCount < NRTH_VM_REGISTRY_CAP) {
         uint32_t idx = g_LuaVmBridge.slotCount++;
         g_LuaVmBridge.registry_1013bf04[idx].luaStatePtr32 = (uint32_t)(uintptr_t)L;
+        RegisterLuaApi_10010ff0(L);
     }
     if (g_LuaVmBridge.execFlag_1013c939 &&
         g_LuaVmBridge.loadbuffer_1013c94c &&
@@ -338,9 +478,6 @@ static void RecordLuaVmAndRunPending(void *L)
         g_LuaVmBridge.execFlag_1013c939 = 0;
     }
 }
-
-static void *g_ClientIfaces_10148ed4[6] = { NULL };
-static void *g_ResourceMgr_1013c948     = NULL;
 
 #if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
 
@@ -364,6 +501,7 @@ static void __fastcall Hook_Client_10002ff0(void *thisPtr, void *edxUnused,
 {
     (void)edxUnused;
     if (thisPtr && a1 && a2 && a3 && a4 && a5 && a6) {
+        g_pClientGame_10148ee8     = thisPtr;
         g_ClientIfaces_10148ed4[0] = a1;
         g_ClientIfaces_10148ed4[1] = a2;
         g_ClientIfaces_10148ed4[2] = a3;
@@ -641,6 +779,9 @@ extern "C" uint32_t ArmClient_10005b80(uint8_t *moduleBase, uint32_t moduleSize,
             if (MH_CreateHook(slot.targetAddr, slot.detourFn, &slot.origTrampoline) == MH_OK &&
                 MH_EnableHook(slot.targetAddr) == MH_OK) {
                 slot.installed = true;
+                if (i == 1 && slot.origTrampoline) {
+                    g_LuaVmBridge.loadbuffer_1013c94c = (PFN_NrthLuaLoadBuffer)slot.origTrampoline;
+                }
                 ++g_TotalInstalledHooks;
                 ++hooked;
             }
@@ -697,9 +838,41 @@ extern "C" uint32_t ResolveClientOffsets_1000c390(const uint8_t *moduleBase, uin
             ++resolved;
         }
     }
-    if (g_ClientResolvedOffsets[6]) {
-        g_LuaVmBridge.pcall_1013c974 = (PFN_NrthLuaPcall)g_ClientResolvedOffsets[6];
+
+    /* Populate the 14 Lua C API pointers (0x1013c974..0x1013c9a8) */
+    g_lua_pushcclosure_1013c984 = (PFN_lua_pushcclosure_t)g_ClientResolvedOffsets[0];
+    g_lua_setfield_1013c9a4     = (PFN_lua_setfield_t)g_ClientResolvedOffsets[1];
+    g_lua_gettop_1013c990       = (PFN_lua_gettop_t)g_ClientResolvedOffsets[2];
+    g_lua_tolstring_1013c980    = (PFN_lua_tolstring_t)g_ClientResolvedOffsets[3];
+    g_lua_createtable_1013c9a0  = (PFN_lua_createtable_t)(g_ClientResolvedOffsets[4]
+                                      ? g_ClientResolvedOffsets[4]
+                                      : g_ClientResolvedOffsets[12]);
+    g_lua_tonumber_1013c98c     = (PFN_lua_tonumber_t)g_ClientResolvedOffsets[5];
+    g_lua_type_1013c988         = (PFN_lua_type_t)(g_ClientResolvedOffsets[6]
+                                      ? g_ClientResolvedOffsets[6]
+                                      : g_ClientResolvedOffsets[7]);
+    uintptr_t pcallHit          = g_ClientResolvedOffsets[8]
+                                      ? g_ClientResolvedOffsets[8]
+                                      : (g_ClientResolvedOffsets[9]
+                                             ? g_ClientResolvedOffsets[9]
+                                             : (g_ClientResolvedOffsets[13]
+                                                    ? g_ClientResolvedOffsets[13]
+                                                    : g_ClientResolvedOffsets[6]));
+    g_lua_pcall_1013c974        = (PFN_lua_pcall_t)pcallHit;
+    if (pcallHit) {
+        g_LuaVmBridge.pcall_1013c974 = (PFN_NrthLuaPcall)pcallHit;
     }
+    g_lua_getfield_1013c99c     = (PFN_lua_getfield_t)(g_ClientResolvedOffsets[14]
+                                      ? g_ClientResolvedOffsets[14]
+                                      : (g_ClientResolvedOffsets[15]
+                                             ? g_ClientResolvedOffsets[15]
+                                             : g_ClientResolvedOffsets[16]));
+    g_lua_settop_1013c9a8       = (PFN_lua_settop_t)g_ClientResolvedOffsets[10];
+    g_lua_pushnumber_1013c97c   = (PFN_lua_pushnumber_t)g_ClientResolvedOffsets[19];
+    g_lua_pushboolean_1013c978  = (PFN_lua_pushboolean_t)g_ClientResolvedOffsets[11];
+    g_lua_pushstring_1013c998   = (PFN_lua_pushstring_t)g_ClientResolvedOffsets[17];
+    g_lua_rawseti_1013c994      = (PFN_lua_rawseti_t)g_ClientResolvedOffsets[18];
+
     return resolved;
 }
 
@@ -863,6 +1036,332 @@ extern "C" void Nrth_ResetArmingCounters(void)
         g_PatchList_101493e4[i].applied    = 0;
     }
     memset(g_ClientResolvedOffsets, 0, sizeof(g_ClientResolvedOffsets));
+}
+
+/* ===========================================================================
+ * In-game feature execution & GTA:SA 1.0 US / MTA actions (0x10001d80..0x1002f370)
+ * =========================================================================== */
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+static bool IsAddressWritable(const void *ptr, size_t len)
+{
+    if (!ptr || len == 0) {
+        return false;
+    }
+    MEMORY_BASIC_INFORMATION mbi;
+    memset(&mbi, 0, sizeof(mbi));
+    if (VirtualQuery(ptr, &mbi, sizeof(mbi)) == 0) {
+        return false;
+    }
+    if (mbi.State != MEM_COMMIT) {
+        return false;
+    }
+    DWORD writableMask = PAGE_READWRITE | PAGE_WRITECOPY |
+                         PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & writableMask) == 0 || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool IsAddressExecutable(const void *ptr)
+{
+    if (!ptr) {
+        return false;
+    }
+    MEMORY_BASIC_INFORMATION mbi;
+    memset(&mbi, 0, sizeof(mbi));
+    if (VirtualQuery(ptr, &mbi, sizeof(mbi)) == 0) {
+        return false;
+    }
+    if (mbi.State != MEM_COMMIT) {
+        return false;
+    }
+    DWORD execMask = PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                     PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & execMask) == 0 || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static uintptr_t GetLocalPed_00B6F5F0(void)
+{
+    const uintptr_t *ppPed = (const uintptr_t *)(uintptr_t)0x00B6F5F0u;
+    if (Nrth_IsPointerReadable_VirtualQuery(ppPed)) {
+        uintptr_t pPed = *ppPed;
+        if (pPed >= 0x10000u && Nrth_IsPointerReadable_VirtualQuery((const void *)pPed)) {
+            return pPed;
+        }
+    }
+    return 0;
+}
+
+static uintptr_t GetCurrentVehicle_00BA18FC(void)
+{
+    const uintptr_t *ppVeh = (const uintptr_t *)(uintptr_t)0x00BA18FCu;
+    if (Nrth_IsPointerReadable_VirtualQuery(ppVeh)) {
+        uintptr_t pVeh = *ppVeh;
+        if (pVeh >= 0x10000u && Nrth_IsPointerReadable_VirtualQuery((const void *)pVeh)) {
+            return pVeh;
+        }
+    }
+    uintptr_t pPed = GetLocalPed_00B6F5F0();
+    if (pPed && Nrth_IsPointerReadable_VirtualQuery((const void *)(pPed + 0x58Cu))) {
+        uintptr_t pVeh = *(const uintptr_t *)(pPed + 0x58Cu);
+        if (pVeh >= 0x10000u && Nrth_IsPointerReadable_VirtualQuery((const void *)pVeh)) {
+            return pVeh;
+        }
+    }
+    return 0;
+}
+#endif
+
+/* Matches Airbreak_10001d80 (VA 0x10001d80..0x100021f0 in NRTH.dll):
+ * Reads camera heading at 0x00B6F258, current vehicle at 0x00BA18FC / local ped at 0x00B6F5F0,
+ * and moves position along WASD + VK_SPACE / VK_CONTROL while zeroing velocity. */
+extern "C" void Nrth_AirbreakTick_10001d80(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    if (!g_PlayerHealthSync.bAirBreak) {
+        return;
+    }
+
+    uintptr_t pEntity = GetCurrentVehicle_00BA18FC();
+    if (!pEntity) {
+        pEntity = GetLocalPed_00B6F5F0();
+    }
+    if (!pEntity || !Nrth_IsPointerReadable_VirtualQuery((const void *)(pEntity + 0x14u))) {
+        return;
+    }
+
+    uintptr_t pMatrix = *(const uintptr_t *)(pEntity + 0x14u);
+    if (!pMatrix || !IsAddressWritable((const void *)(pMatrix + 0x30u), 12)) {
+        return;
+    }
+
+    float camHeading = 0.0f;
+    const float *pCamHeading = (const float *)(uintptr_t)0x00B6F258u;
+    if (Nrth_IsPointerReadable_VirtualQuery(pCamHeading)) {
+        camHeading = *pCamHeading;
+    }
+
+    float speed = g_PlayerHealthSync.fAirBreakSpeed > 0.01f
+                      ? g_PlayerHealthSync.fAirBreakSpeed
+                      : 1.0f;
+    float step = speed * 0.25f;
+    if (GetAsyncKeyState(VK_LSHIFT) & 0x8000) {
+        step *= (1.0f + (g_PlayerHealthSync.fAirBreakIncr > 0.0f ? g_PlayerHealthSync.fAirBreakIncr : 0.5f));
+    }
+
+    float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+    /* Forward / backward along camera heading (0x00B6F258) */
+    float fwdX = -cosf(camHeading);
+    float fwdY = -sinf(camHeading);
+    float rightX = sinf(camHeading);
+    float rightY = -cosf(camHeading);
+
+    if (GetAsyncKeyState('W') & 0x8000) { dx += fwdX * step;   dy += fwdY * step; }
+    if (GetAsyncKeyState('S') & 0x8000) { dx -= fwdX * step;   dy -= fwdY * step; }
+    if (GetAsyncKeyState('D') & 0x8000) { dx += rightX * step; dy += rightY * step; }
+    if (GetAsyncKeyState('A') & 0x8000) { dx -= rightX * step; dy -= rightY * step; }
+    if (GetAsyncKeyState(VK_SPACE) & 0x8000)    { dz += step; }
+    if (GetAsyncKeyState(VK_LCONTROL) & 0x8000) { dz -= step; }
+
+    float *pPos = (float *)(pMatrix + 0x30u);
+    pPos[0] += dx;
+    pPos[1] += dy;
+    pPos[2] += dz;
+
+    /* Zero move speed (entity + 0x44..0x4C) and turn speed (entity + 0x54..0x5C) */
+    if (IsAddressWritable((void *)(pEntity + 0x44u), 28)) {
+        float *pMove = (float *)(pEntity + 0x44u);
+        pMove[0] = 0.0f;
+        pMove[1] = 0.0f;
+        pMove[2] = 0.0f;
+        float *pTurn = (float *)(pEntity + 0x54u);
+        pTurn[0] = 0.0f;
+        pTurn[1] = 0.0f;
+        pTurn[2] = 0.0f;
+    }
+#endif
+}
+
+/* Matches All Weapons button handler at VA 0x1002a5a7: calls GTA:SA CWeaponCheat (0x004385B0) */
+extern "C" void Nrth_TriggerAllWeapons_1002a5a7(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    if (!GetLocalPed_00B6F5F0()) {
+        return;
+    }
+    typedef void (__cdecl *PFN_CWeaponCheat)(void);
+    PFN_CWeaponCheat fn = (PFN_CWeaponCheat)(uintptr_t)0x004385B0u;
+    if (IsAddressExecutable((const void *)fn)) {
+        fn();
+    }
+#endif
+}
+
+/* Matches Jetpack button handler at VA 0x1002a86c: calls GTA:SA CJetpackCheat (0x00439600) */
+extern "C" void Nrth_TriggerJetpack_1002a86c(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    if (!GetLocalPed_00B6F5F0()) {
+        return;
+    }
+    typedef void (__cdecl *PFN_CJetpackCheat)(void);
+    PFN_CJetpackCheat fn = (PFN_CJetpackCheat)(uintptr_t)0x00439600u;
+    if (IsAddressExecutable((const void *)fn)) {
+        fn();
+    }
+#endif
+}
+
+/* Matches RepairCurrentVehicle at VA 0x1002f070 */
+extern "C" bool Nrth_RepairCurrentVehicle_1002f070(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (!pVeh) {
+        return false;
+    }
+    if (IsAddressWritable((void *)(pVeh + 0x4C0u), sizeof(float))) {
+        *(float *)(pVeh + 0x4C0u) = 1000.0f;
+        return true;
+    }
+#endif
+    return false;
+}
+
+/* Matches StartCurrentVehicleEngine at VA 0x1002f0f0 */
+extern "C" bool Nrth_StartCurrentVehicleEngine_1002f0f0(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (!pVeh) {
+        return false;
+    }
+    if (IsAddressWritable((void *)(pVeh + 0x428u), 1)) {
+        *(uint8_t *)(pVeh + 0x428u) |= 0x10u;
+        return true;
+    }
+#endif
+    return false;
+}
+
+/* Matches UnlockNearestVehicle at VA 0x1002eea0 */
+extern "C" bool Nrth_UnlockNearestVehicle_1002eea0(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (pVeh && IsAddressWritable((void *)(pVeh + 0x4F8u), sizeof(uint32_t))) {
+        *(uint32_t *)(pVeh + 0x4F8u) = 1u;
+        return true;
+    }
+#endif
+    return false;
+}
+
+/* Matches Vehicle Stop button & Fast Stop at VA 0x10030306 */
+extern "C" bool Nrth_StopCurrentVehicle(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (pVeh && IsAddressWritable((void *)(pVeh + 0x44u), 28)) {
+        float *pMove = (float *)(pVeh + 0x44u);
+        pMove[0] = 0.0f;
+        pMove[1] = 0.0f;
+        pMove[2] = 0.0f;
+        float *pTurn = (float *)(pVeh + 0x54u);
+        pTurn[0] = 0.0f;
+        pTurn[1] = 0.0f;
+        pTurn[2] = 0.0f;
+        return true;
+    }
+#endif
+    return false;
+}
+
+/* Matches Bomb Car / Destroy at VA 0x10030510 */
+extern "C" bool Nrth_DestroyCurrentVehicle(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (pVeh && IsAddressWritable((void *)(pVeh + 0x4C0u), sizeof(float))) {
+        *(float *)(pVeh + 0x4C0u) = 0.0f;
+        return true;
+    }
+#endif
+    return false;
+}
+
+/* Matches per-frame game feature loop in Hooked_Present (VA 0x10015812..0x10015aa0) */
+extern "C" void Nrth_TickGameFeatures_10015812(void)
+{
+#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+    /* 1. Direct GTA:SA global cheat flags:
+     *    0x00969160 = bDriveOnWater (0x10015a7a)
+     *    0x00969152 = bCarsCanFly   (0x10015a8a)
+     *    0x0096916C = bMegaJump     (0x1002a65f)
+     *    0x00969178 = bInfiniteAmmo */
+    if (IsAddressWritable((void *)(uintptr_t)0x00969160u, 1)) {
+        *(uint8_t *)(uintptr_t)0x00969160u = g_PlayerHealthSync.bDriveWater ? 1u : 0u;
+    }
+    if (IsAddressWritable((void *)(uintptr_t)0x00969152u, 1)) {
+        *(uint8_t *)(uintptr_t)0x00969152u = g_PlayerHealthSync.bFlyingCar ? 1u : 0u;
+    }
+    if (IsAddressWritable((void *)(uintptr_t)0x0096916Cu, 1)) {
+        *(uint8_t *)(uintptr_t)0x0096916Cu = g_PlayerHealthSync.bHighJump ? 1u : 0u;
+    }
+    if (IsAddressWritable((void *)(uintptr_t)0x00969178u, 1)) {
+        *(uint8_t *)(uintptr_t)0x00969178u = g_PlayerHealthSync.bInfiniteAmmo ? 1u : 0u;
+    }
+
+    /* 2. Local player ped (0x00B6F5F0): Give HP, Give Armor, GodMode */
+    uintptr_t pPed = GetLocalPed_00B6F5F0();
+    if (pPed) {
+        if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveHp) &&
+            IsAddressWritable((void *)(pPed + 0x540u), sizeof(float))) {
+            float targetHp = g_PlayerHealthSync.fHealth > 0.0f ? g_PlayerHealthSync.fHealth : 100.0f;
+            if (g_PlayerHealthSync.bGodMode && targetHp < 100.0f) {
+                targetHp = 100.0f;
+            }
+            *(float *)(pPed + 0x540u) = targetHp;
+        }
+        if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveArmor) &&
+            IsAddressWritable((void *)(pPed + 0x548u), sizeof(float))) {
+            float targetAr = g_PlayerHealthSync.fArmor > 0.0f ? g_PlayerHealthSync.fArmor : 100.0f;
+            if (g_PlayerHealthSync.bGodMode && targetAr < 100.0f) {
+                targetAr = 100.0f;
+            }
+            *(float *)(pPed + 0x548u) = targetAr;
+        }
+    }
+
+    /* 3. Current vehicle (0x00BA18FC): Vehicle God-Mode, Fast Stop, Repair, Start Engine, Unlock */
+    uintptr_t pVeh = GetCurrentVehicle_00BA18FC();
+    if (pVeh) {
+        if ((g_PlayerHealthSync.bVehGodMode || g_PlayerHealthSync.bRepairCar) &&
+            IsAddressWritable((void *)(pVeh + 0x4C0u), sizeof(float))) {
+            *(float *)(pVeh + 0x4C0u) = 1000.0f;
+        }
+        if (g_PlayerHealthSync.bStartEngine &&
+            IsAddressWritable((void *)(pVeh + 0x428u), 1)) {
+            *(uint8_t *)(pVeh + 0x428u) |= 0x10u;
+        }
+        if (g_PlayerHealthSync.bUnlockCar &&
+            IsAddressWritable((void *)(pVeh + 0x4F8u), sizeof(uint32_t))) {
+            *(uint32_t *)(pVeh + 0x4F8u) = 1u;
+        }
+        if (g_PlayerHealthSync.bFastStop && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {
+            Nrth_StopCurrentVehicle();
+        }
+    }
+
+    /* 4. AirBreak movement tick (0x10001d80) */
+    if (g_PlayerHealthSync.bAirBreak) {
+        Nrth_AirbreakTick_10001d80();
+    }
+#endif
 }
 
 /* ===========================================================================
@@ -1578,13 +2077,14 @@ static HRESULT WINAPI Hooked_Present(IDirect3DDevice9 *pDevice, const RECT *pSrc
 
         UpdateOverlayInput();
 
+        /* Execute in-game feature logic on every frame (matches 0x10015812..0x10015aa0) */
+        Nrth_TickGameFeatures_10015812();
+
         ImGui_ImplDX9_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (g_bMenuOpen) {
-            BuildOverlayMenu();
-        }
+        NrthUI_RenderFrame(g_bMenuOpen);
 
         ImGui::EndFrame();
         ImGui::Render();

@@ -100,6 +100,17 @@ typedef struct _SPlayerHealthSync {
     float    fAirBreakIncr; /* AirBreak increment                              */
     uint8_t  bAirBreak;     /* AirBreak active                                 */
     uint8_t  bJetpack;      /* Jetpack active                                  */
+    uint8_t  bGiveHp;       /* Continuous/active Give HP                       */
+    uint8_t  bGiveArmor;    /* Continuous/active Give Armor                    */
+    uint8_t  bVehGodMode;   /* Vehicle God-Mode (0x101490b3)                   */
+    uint8_t  bFallBike;     /* Anti Fall Bike                                  */
+    uint8_t  bFastStop;     /* Fast Stop (0x101490b8)                          */
+    uint8_t  bFlyingCar;    /* Flying Car (0x10148f10 -> 0x969152)             */
+    uint8_t  bDriveWater;   /* Drive Water (0x101490a0 -> 0x969160)            */
+    uint8_t  bVehicleChaos; /* Vehicle Chaos (0x101490b9)                      */
+    uint8_t  bUnlockCar;    /* Unlock Car (0x10149088)                         */
+    uint8_t  bRepairCar;    /* Repair Car (0x101490c9 / 0x101490b1)            */
+    uint8_t  bStartEngine;  /* Start Engine (0x10149110 / 0x10148f11)          */
 } SPlayerHealthSync;
 
 typedef struct _SWeaponAimSync {
@@ -152,6 +163,17 @@ SPlayerHealthSync      *Nrth_GetPlayerHealthSync(void);
 SWeaponAimSync         *Nrth_GetWeaponAimSync(void);
 NrthReportChannelState *Nrth_GetReportChannelState(void);
 bool                    Nrth_IsPointerReadable_VirtualQuery(const void *ptr);
+
+/* ---- In-game feature execution & GTA:SA/MTA actions (0x10001d80..0x1002f370) */
+void Nrth_AirbreakTick_10001d80(void);
+void Nrth_TickGameFeatures_10015812(void);
+void Nrth_TriggerAllWeapons_1002a5a7(void);
+void Nrth_TriggerJetpack_1002a86c(void);
+bool Nrth_RepairCurrentVehicle_1002f070(void);
+bool Nrth_StartCurrentVehicleEngine_1002f0f0(void);
+bool Nrth_UnlockNearestVehicle_1002eea0(void);
+bool Nrth_StopCurrentVehicle(void);
+bool Nrth_DestroyCurrentVehicle(void);
 
 #ifdef __cplusplus
 }

@@ -32,6 +32,7 @@ extern "C" {
 
 void NrthUI_ApplyTheme(void);
 void NrthUI_Build(void);
+void NrthUI_RenderFrame(bool menuOpen);
 
 const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);

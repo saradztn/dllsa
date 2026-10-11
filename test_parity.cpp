@@ -342,6 +342,21 @@ int main(void)
               Nrth_GetWeaponAimSync()->fClickWarpMaxDist == 300.0f,
               "Feature state sync: SPlayerHealthSync & SWeaponAimSync initialized and synced");
 
+        /* Exercise in-game feature tick & GTA:SA/MTA action helpers */
+        Nrth_TickGameFeatures_10015812();
+        Nrth_AirbreakTick_10001d80();
+        Nrth_TriggerAllWeapons_1002a5a7();
+        Nrth_TriggerJetpack_1002a86c();
+        bool vehAct = Nrth_RepairCurrentVehicle_1002f070() ||
+                      Nrth_StartCurrentVehicleEngine_1002f0f0() ||
+                      Nrth_UnlockNearestVehicle_1002eea0() ||
+                      Nrth_StopCurrentVehicle() ||
+                      Nrth_DestroyCurrentVehicle();
+        CHECK(!vehAct && Nrth_GetPlayerHealthSync()->bVehGodMode == 0 &&
+              Nrth_GetPlayerHealthSync()->bDriveWater == 0 &&
+              Nrth_GetPlayerHealthSync()->bFlyingCar == 0,
+              "In-game feature tick (0x10015812) & GTA:SA/MTA action helpers (0x10001d80..0x1002f0f0) guarded safely");
+
         NrthLuaVmBridge *bridge = Nrth_GetLuaVmBridge();
         uint32_t dummyState = 0xCAFEBABEu;
         bridge->default_L_1013c95c  = &dummyState;

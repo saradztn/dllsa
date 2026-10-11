@@ -176,7 +176,9 @@ extern "C" void NrthUI_SyncFeaturesToState(void)
     SPlayerHealthSync *hs = Nrth_GetPlayerHealthSync();
     if (hs) {
         hs->bGodMode       = s_cheatFeatures[0].on ? 1 : 0;
+        hs->bGiveHp        = s_cheatFeatures[1].on ? 1 : 0;
         hs->fHealth        = s_cheatFeatures[1].on ? s_hpValue : 100.0f;
+        hs->bGiveArmor     = s_cheatFeatures[2].on ? 1 : 0;
         hs->fArmor         = s_cheatFeatures[2].on ? s_armorValue : 100.0f;
         hs->bInfiniteAmmo  = s_cheatFeatures[3].on ? 1 : 0;
         hs->bAntiSpread    = s_cheatFeatures[4].on ? 1 : 0;
@@ -185,6 +187,17 @@ extern "C" void NrthUI_SyncFeaturesToState(void)
         hs->fAirBreakIncr  = s_abIncr;
         hs->bHighJump      = s_cheatFeatures[10].on ? 1 : 0;
         hs->bJetpack       = s_cheatFeatures[12].on ? 1 : 0;
+
+        /* Vehicle features (0x10148f10..0x10149110 in NRTH.dll) */
+        hs->bVehGodMode    = s_vehicleFeatures[0].on ? 1 : 0;
+        hs->bVehicleChaos  = s_vehicleFeatures[1].on ? 1 : 0;
+        hs->bDriveWater    = s_vehicleFeatures[2].on ? 1 : 0;
+        hs->bFastStop      = s_vehicleFeatures[3].on ? 1 : 0;
+        hs->bFallBike      = s_vehicleFeatures[4].on ? 1 : 0;
+        hs->bFlyingCar     = s_vehicleFeatures[5].on ? 1 : 0;
+        hs->bStartEngine   = s_vehicleFeatures[6].on ? 1 : 0;
+        hs->bRepairCar     = s_vehicleFeatures[7].on ? 1 : 0;
+        hs->bUnlockCar     = s_vehicleFeatures[8].on ? 1 : 0;
     }
 
     SWeaponAimSync *ws = Nrth_GetWeaponAimSync();
@@ -201,7 +214,6 @@ extern "C" void NrthUI_SyncFeaturesToState(void)
     if (rc) {
         rc->suppressReports = s_cheatFeatures[5].on || s_hideObsDiscord;
     }
-    (void)s_vehicleFeatures;
     (void)s_antiAfk;
 }
 
@@ -426,10 +438,30 @@ void NrthUI_ApplyTheme()
     c[ImGuiCol_Text]            = ImVec4(0.93f, 0.91f, 0.98f, 1.f);
 }
 
+struct ToastNotification {
+    std::string text;
+    ULONGLONG   createdTick;
+};
+static std::vector<ToastNotification> s_notifications;
+static bool s_showKeybindWindow = false;
+static Feature *s_capturingFeature = nullptr;
+
+static void AddNotification_10002cd0(const char *msg)
+{
+    if (!msg || !msg[0] || !g_cfg.notifications) {
+        return;
+    }
+    if (s_notifications.size() >= 6) {
+        s_notifications.erase(s_notifications.begin());
+    }
+    s_notifications.push_back({ msg, GetTickCount64() });
+}
+
 static void FeatureAction(const char *msg)
 {
-    s_lastAction = msg;
+    s_lastAction = msg ? msg : "";
     NrthUI_SyncFeaturesToState();
+    AddNotification_10002cd0(msg);
 }
 
 static void EnsurePacketsPopulated()
@@ -814,11 +846,53 @@ static void DrawPlayerTab()
     for (auto &f : s_friends) ImGui::BulletText("%s", f.c_str());
 }
 
+static void TriggerFeatureImmediateAction(Feature &f)
+{
+    if (strcmp(f.label, "All Weapons") == 0 && f.on) {
+        Nrth_TriggerAllWeapons_1002a5a7();
+        FeatureAction("All weapons given (1000 ammo)");
+        return;
+    }
+    if (strcmp(f.label, "Jetpack") == 0) {
+        Nrth_TriggerJetpack_1002a86c();
+        FeatureAction(f.on ? "Jetpack enabled" : "Jetpack disabled");
+        return;
+    }
+    if (strcmp(f.label, "Repair Car") == 0 && f.on) {
+        if (Nrth_RepairCurrentVehicle_1002f070()) {
+            FeatureAction("Vehicle repaired");
+        } else {
+            FeatureAction("You must be in a vehicle");
+        }
+        return;
+    }
+    if (strcmp(f.label, "Start Engine") == 0 && f.on) {
+        if (Nrth_StartCurrentVehicleEngine_1002f0f0()) {
+            FeatureAction("Engine started");
+        } else {
+            FeatureAction("You must be in a vehicle");
+        }
+        return;
+    }
+    if (strcmp(f.label, "Unlock Car") == 0 && f.on) {
+        if (Nrth_UnlockNearestVehicle_1002eea0()) {
+            FeatureAction("Unlocked nearest vehicle");
+        } else {
+            FeatureAction("No vehicle found nearby");
+        }
+        return;
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s %s", f.label, f.on ? "enabled" : "disabled");
+    FeatureAction(msg);
+}
+
 static void FeatureRow(Feature &f, const char *id)
 {
     ImGui::PushID(id);
     if (ImGui::Checkbox(f.label, &f.on)) {
         NrthUI_SyncFeaturesToState();
+        TriggerFeatureImmediateAction(f);
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("##gear")) ImGui::OpenPopup("##settings_panel");
@@ -834,9 +908,9 @@ static void FeatureRow(Feature &f, const char *id)
             if (ImGui::SliderFloat("Increment: %.2f", &s_abIncr, 0.05f, 2.f)) NrthUI_SyncFeaturesToState();
             ImGui::Separator();
             ImGui::Text("Keybinds");
-            ImGui::BulletText("Forward:"); ImGui::BulletText("Back:");
-            ImGui::BulletText("Left:");    ImGui::BulletText("Right:");
-            ImGui::BulletText("Down:");
+            ImGui::BulletText("Forward: W"); ImGui::BulletText("Back: S");
+            ImGui::BulletText("Left: A");    ImGui::BulletText("Right: D");
+            ImGui::BulletText("Up: Space / Down: LCtrl");
         } else if (strcmp(f.label, "Click Warp") == 0) {
             if (ImGui::SliderFloat("Max Distance##sp", &s_maxDist, 10, 1000)) NrthUI_SyncFeaturesToState();
             if (ImGui::SliderFloat("Crosshair Size##sp", &s_crossSize, 2, 40)) NrthUI_SyncFeaturesToState();
@@ -850,9 +924,28 @@ static void FeatureRow(Feature &f, const char *id)
             ImGui::TextDisabled("settings synced to SPlayerHealthSync/SWeaponAimSync");
         }
         ImGui::Separator();
-        if (ImGui::Button("Press a key...")) s_bindCapture = -2;
+        if (s_capturingFeature == &f) {
+            ImGui::Button("Press a key...");
+            for (int vk = 1; vk < 256; ++vk) {
+                if (vk == VK_LBUTTON || vk == VK_RBUTTON) continue;
+                if (GetAsyncKeyState(vk) & 1) {
+                    f.key = (vk == VK_ESCAPE) ? 0 : vk;
+                    s_capturingFeature = nullptr;
+                    break;
+                }
+            }
+        } else {
+            char keyBtn[64];
+            if (f.key > 0) snprintf(keyBtn, sizeof(keyBtn), "Key: %d (click to change)", f.key);
+            else           snprintf(keyBtn, sizeof(keyBtn), "Press a key...");
+            if (ImGui::Button(keyBtn)) {
+                s_capturingFeature = &f;
+            }
+        }
         ImGui::SameLine();
-        ImGui::TextDisabled("mode: Toggle/Hold");
+        const char *modes[] = { "Hold", "Toggle" };
+        ImGui::SetNextItemWidth(90);
+        ImGui::Combo("##mode", &f.mode, modes, 2);
         ImGui::EndPopup();
     }
     ImGui::PopID();
@@ -865,6 +958,36 @@ static void DrawOtherTab()
         char id[32];
         snprintf(id, sizeof(id), "cf%d", i);
         FeatureRow(s_cheatFeatures[i], id);
+    }
+    ImGui::Separator();
+    /* Action buttons matching 0x1002a580..0x1002a880 in NRTH.dll */
+    if (ImGui::Button("All Weapons")) {
+        s_cheatFeatures[13].on = true;
+        NrthUI_SyncFeaturesToState();
+        Nrth_TriggerAllWeapons_1002a5a7();
+        FeatureAction("All weapons given (1000 ammo)");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("High Jump")) {
+        s_cheatFeatures[10].on = !s_cheatFeatures[10].on;
+        NrthUI_SyncFeaturesToState();
+        FeatureAction(s_cheatFeatures[10].on ? "High Jump enabled" : "High Jump disabled");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Money Exploit")) {
+        s_cheatFeatures[11].on = !s_cheatFeatures[11].on;
+        if (s_cheatFeatures[11].on) {
+            static const char kMoneyLua[] = "givePlayerMoney(50000)";
+            NrthUI_ExecuteLuaViaBridge(kMoneyLua, sizeof(kMoneyLua) - 1, 0);
+        }
+        FeatureAction(s_cheatFeatures[11].on ? "Money Exploit enabled" : "Money Exploit disabled");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Jetpack")) {
+        s_cheatFeatures[12].on = !s_cheatFeatures[12].on;
+        NrthUI_SyncFeaturesToState();
+        Nrth_TriggerJetpack_1002a86c();
+        FeatureAction(s_cheatFeatures[12].on ? "Jetpack enabled" : "Jetpack disabled");
     }
     if (!s_lastAction.empty()) ImGui::TextDisabled("last: %s", s_lastAction.c_str());
 }
@@ -916,14 +1039,29 @@ static void DrawVehicleTab()
     ImGui::SameLine();
     if (ImGui::Button("Teleport Vehicle")) FeatureAction("Vehicle teleported to you");
     ImGui::SameLine();
-    if (ImGui::Button("Bomb Car")) FeatureAction("Vehicle destroyed");
-    if (ImGui::Button("Repair Car")) FeatureAction("Vehicle repaired");
+    if (ImGui::Button("Bomb Car")) {
+        if (Nrth_DestroyCurrentVehicle()) FeatureAction("Vehicle destroyed");
+        else FeatureAction("You must be in a vehicle");
+    }
+    if (ImGui::Button("Repair Car")) {
+        if (Nrth_RepairCurrentVehicle_1002f070()) FeatureAction("Vehicle repaired");
+        else FeatureAction("You must be in a vehicle");
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Start Engine")) FeatureAction("Engine started");
+    if (ImGui::Button("Start Engine")) {
+        if (Nrth_StartCurrentVehicleEngine_1002f0f0()) FeatureAction("Engine started");
+        else FeatureAction("You must be in a vehicle");
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Stop")) FeatureAction("Vehicle stopped");
+    if (ImGui::Button("Stop")) {
+        if (Nrth_StopCurrentVehicle()) FeatureAction("Vehicle stopped");
+        else FeatureAction("You must be in a vehicle");
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Unlock Car")) FeatureAction("Unlocked nearest vehicle");
+    if (ImGui::Button("Unlock Car")) {
+        if (Nrth_UnlockNearestVehicle_1002eea0()) FeatureAction("Unlocked nearest vehicle");
+        else FeatureAction("No vehicle found nearby");
+    }
     ImGui::Columns(1);
 }
 
@@ -1041,17 +1179,21 @@ static void DrawConfigTab()
     ImGui::Checkbox("Watermark", &g_cfg.watermark);
     ImGui::SameLine();
     ImGui::Checkbox("Notifications", &g_cfg.notifications);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Keybind's", &s_showKeybindWindow);
     ImGui::Separator();
 
     ImGui::Text("Menu Toggle Key");
     ImGui::SameLine();
     if (s_waitingForKey) {
         ImGui::Button("Press...");
-        for (int k = 0; k < 256; ++k) {
-            if (ImGui::IsKeyPressed((ImGuiKey)k, false)) {
+        for (int k = 1; k < 256; ++k) {
+            if (k == VK_LBUTTON || k == VK_RBUTTON) continue;
+            if (GetAsyncKeyState(k) & 1) {
                 g_cfg.menuKey = k;
                 NrthConfig_Save(NULL);
                 s_waitingForKey = false;
+                break;
             }
         }
     } else if (ImGui::Button("Set")) {
@@ -1062,7 +1204,36 @@ static void DrawConfigTab()
 
     ImGui::Separator();
     ImGui::Text("Keybind's");
-    if (s_binds.empty()) ImGui::TextDisabled("No binds");
+    bool anyBind = false;
+    for (int i = 0; i < (int)(sizeof(s_cheatFeatures) / sizeof(Feature)); ++i) {
+        if (s_cheatFeatures[i].key > 0) {
+            anyBind = true;
+            ImGui::PushID(1000 + i);
+            ImGui::Text("%s -> key %d (%s)", s_cheatFeatures[i].label, s_cheatFeatures[i].key,
+                        s_cheatFeatures[i].mode ? "Toggle" : "Hold");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) {
+                s_cheatFeatures[i].key = 0;
+                FeatureAction((std::string("Bind cleared: ") + s_cheatFeatures[i].label).c_str());
+            }
+            ImGui::PopID();
+        }
+    }
+    for (int i = 0; i < (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)); ++i) {
+        if (s_vehicleFeatures[i].key > 0) {
+            anyBind = true;
+            ImGui::PushID(2000 + i);
+            ImGui::Text("%s -> key %d (%s)", s_vehicleFeatures[i].label, s_vehicleFeatures[i].key,
+                        s_vehicleFeatures[i].mode ? "Toggle" : "Hold");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) {
+                s_vehicleFeatures[i].key = 0;
+                FeatureAction((std::string("Bind cleared: ") + s_vehicleFeatures[i].label).c_str());
+            }
+            ImGui::PopID();
+        }
+    }
+    if (!anyBind && s_binds.empty()) ImGui::TextDisabled("No binds");
     for (int i = 0; i < (int)s_binds.size(); ++i) {
         ImGui::Text("Bind: %s -> key %d", s_binds[i].action.c_str(), s_binds[i].key);
         ImGui::SameLine();
@@ -1077,17 +1248,133 @@ static void DrawConfigTab()
     ImGui::Columns(1);
 }
 
+/* Matches PollHotkeys at VA 0x10012250 in NRTH.dll */
+static void PollHotkeys_10012250(void)
+{
+    if (s_capturingFeature || s_waitingForKey) {
+        return;
+    }
+    auto pollFeatureArray = [](Feature *arr, int count) {
+        for (int i = 0; i < count; ++i) {
+            Feature &f = arr[i];
+            if (f.key <= 0) continue;
+            if (f.mode == 1) { /* Toggle */
+                if (GetAsyncKeyState(f.key) & 1) {
+                    f.on = !f.on;
+                    NrthUI_SyncFeaturesToState();
+                    TriggerFeatureImmediateAction(f);
+                }
+            } else { /* Hold */
+                bool down = (GetAsyncKeyState(f.key) & 0x8000) != 0;
+                if (f.on != down) {
+                    f.on = down;
+                    NrthUI_SyncFeaturesToState();
+                }
+            }
+        }
+    };
+    pollFeatureArray(s_cheatFeatures, (int)(sizeof(s_cheatFeatures) / sizeof(Feature)));
+    pollFeatureArray(s_vehicleFeatures, (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)));
+}
+
+/* Matches DrawWatermark at VA 0x10012bc0 in NRTH.dll */
+static void DrawWatermark_10012bc0(void)
+{
+    if (!g_cfg.watermark) {
+        return;
+    }
+    ImGuiIO &io = ImGui::GetIO();
+    float fps = io.Framerate > 0.0f ? io.Framerate : 60.0f;
+    char wmBuf[256];
+    snprintf(wmBuf, sizeof(wmBuf), "NORTH  |  FPS: %.0f  |  Server: %s", fps, s_status.c_str());
+
+    ImVec2 textSz = ImGui::CalcTextSize(wmBuf);
+    float winW = textSz.x + 24.0f;
+    float posX = (io.DisplaySize.x > winW + 16.0f) ? (io.DisplaySize.x - winW - 14.0f) : 10.0f;
+    ImGui::SetNextWindowPos(ImVec2(posX, 12.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    if (ImGui::Begin("##Watermark", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
+        ImGui::TextColored(kAccentHover, "NORTH");
+        ImGui::SameLine();
+        ImGui::Text("|  FPS: %.0f  |  Server: %s", fps, s_status.c_str());
+    }
+    ImGui::End();
+}
+
+/* Matches DrawKeybindList at VA 0x100130a0 in NRTH.dll */
+static void DrawKeybindList_100130a0(void)
+{
+    if (!s_showKeybindWindow) {
+        return;
+    }
+    ImGui::SetNextWindowPos(ImVec2(14.0f, 60.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(230.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.80f);
+    if (ImGui::Begin("Keybind's##floating", &s_showKeybindWindow,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings)) {
+        bool any = false;
+        auto listFeatureArray = [&](Feature *arr, int count) {
+            for (int i = 0; i < count; ++i) {
+                if (arr[i].key > 0) {
+                    any = true;
+                    ImGui::Text("%s [%s]", arr[i].label, arr[i].mode ? "Toggle" : "Hold");
+                    ImGui::SameLine(175.0f);
+                    if (arr[i].on) {
+                        ImGui::TextColored(kAccentHover, "ON");
+                    } else {
+                        ImGui::TextDisabled("OFF");
+                    }
+                }
+            }
+        };
+        listFeatureArray(s_cheatFeatures, (int)(sizeof(s_cheatFeatures) / sizeof(Feature)));
+        listFeatureArray(s_vehicleFeatures, (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)));
+        if (!any) {
+            ImGui::TextDisabled("No active binds");
+        }
+    }
+    ImGui::End();
+}
+
+/* Matches DrawNotifications at VA 0x10016990 in NRTH.dll */
+static void DrawNotifications_10016990(void)
+{
+    if (!g_cfg.notifications || s_notifications.empty()) {
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    const ULONGLONG kDurationMs = 3500ULL;
+    for (int i = (int)s_notifications.size() - 1; i >= 0; --i) {
+        if (now - s_notifications[i].createdTick > kDurationMs) {
+            s_notifications.erase(s_notifications.begin() + i);
+        }
+    }
+    ImGuiIO &io = ImGui::GetIO();
+    float baseY = (io.DisplaySize.y > 100.0f ? io.DisplaySize.y : 720.0f) - 70.0f;
+    float baseX = (io.DisplaySize.x > 300.0f ? io.DisplaySize.x : 1280.0f) - 275.0f;
+    for (int i = 0; i < (int)s_notifications.size(); ++i) {
+        char winId[32];
+        snprintf(winId, sizeof(winId), "##toast_%d", i);
+        ImGui::SetNextWindowPos(ImVec2(baseX, baseY - i * 58.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(260.0f, 50.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.88f);
+        if (ImGui::Begin(winId, nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                         ImGuiWindowFlags_NoMove)) {
+            ImGui::TextColored(kAccentHover, "Notification");
+            ImGui::TextUnformatted(s_notifications[i].text.c_str());
+        }
+        ImGui::End();
+    }
+}
+
 void NrthUI_Build()
 {
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.35f);
-    ImGui::Begin("##status_ovr", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);
-    ImGui::TextUnformatted(s_status.c_str());
-    ImGui::End();
-
     ImGui::SetNextWindowSize(ImVec2(860, 560), ImGuiCond_FirstUseEver);
     if (!s_menuOpen) return;
     if (!ImGui::Begin("North Cheat", &s_menuOpen)) {
@@ -1095,6 +1382,8 @@ void NrthUI_Build()
         return;
     }
 
+    ImGui::TextColored(kAccentHover, "N O R T H");
+    ImGui::SameLine();
     StatusLine();
     ImGui::Separator();
 
@@ -1160,9 +1449,22 @@ void NrthUI_Build()
     ImGui::End();
 }
 
+extern "C" void NrthUI_RenderFrame(bool menuOpen)
+{
+    PollHotkeys_10012250();
+    DrawWatermark_10012bc0();
+    DrawKeybindList_100130a0();
+    if (menuOpen) {
+        s_menuOpen = true;
+        NrthUI_Build();
+    }
+    DrawNotifications_10016990();
+}
+
 #else /* Headless / non-Win32 build for verification tests */
 
 extern "C" void NrthUI_ApplyTheme(void) {}
 extern "C" void NrthUI_Build(void) {}
+extern "C" void NrthUI_RenderFrame(bool menuOpen) { (void)menuOpen; }
 
 #endif
