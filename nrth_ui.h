@@ -36,6 +36,7 @@ void NrthUI_RenderFrame(bool menuOpen);
 uint8_t  NrthHook_IsInGame(void);              /* g_pClientGame_10148ee8 != NULL   */
 uint32_t NrthUI_IsStayModeOn(void);
 void     NrthUI_SetStayMode(uint32_t on);
+void     NrthUI_BuildSessionProbeLua(char *buf, size_t cap);
 
 const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);

@@ -446,6 +446,26 @@ static uint32_t s_stayModeOn = 0;
 extern "C" uint32_t NrthUI_IsStayModeOn(void)       { return s_stayModeOn; }
 extern "C" void     NrthUI_SetStayMode(uint32_t on) { s_stayModeOn = on ? 1u : 0u; }
 
+/* Read-only session probe: runs through the Lua VM bridge inside the joined
+ * server's client environment and prints YOUR OWN session facts into the
+ * local chat (nickname, serial, ping, player count). Nothing is modified. */
+extern "C" void NrthUI_BuildSessionProbeLua(char *buf, size_t cap)
+{
+    if (!buf || cap == 0) {
+        return;
+    }
+    snprintf(buf, cap,
+        "-- DARKANARCHY SESSION ANALYSIS | DEV: XRAOUF (read-only probe)\n"
+        "local lp = getLocalPlayer()\n"
+        "if lp then\n"
+        "  outputChatBox('== DARKANARCHY SESSION ==', 255, 70, 90)\n"
+        "  outputChatBox('nick:   ' .. tostring(getPlayerName(lp)), 220, 220, 220)\n"
+        "  outputChatBox('serial: ' .. tostring(getPlayerSerial(lp)), 220, 220, 220)\n"
+        "  outputChatBox('ping:   ' .. tostring(getPlayerPing(lp)) ..\n"
+        "     '  | players: ' .. tostring(#getElementsByType('player')), 220, 220, 220)\n"
+        "end\n");
+}
+
 /* ===========================================================================
  * Full Dear ImGui + Embedded Lua 5.4.6 UI (Windows build)
  * =========================================================================== */
@@ -1919,6 +1939,14 @@ static void DrawSessionTab()
         ImGui::TextDisabled("%s: %u",
             TR("MTA client hooks armed", "خطافات عميل MTA المُسلّحة"),
             (unsigned)Nrth_GetTotalInstalledHooks());
+        /* Lua VMs captured by the bridge = hard evidence we are inside the
+         * server's client scripting environment (captured when you join) */
+        {
+            const NrthLuaVmBridge *bridge = Nrth_GetLuaVmBridge();
+            ImGui::TextDisabled("%s: %u",
+                TR("Lua VMs captured", "أجهزة Lua الملتقطة"),
+                bridge ? (unsigned)bridge->slotCount : 0u);
+        }
         /* session clock: starts on first in-game detection */
         static ULONGLONG s_firstInGame = 0;
         if (inGame) {
@@ -1930,6 +1958,20 @@ static void DrawSessionTab()
         } else {
             s_firstInGame = 0;
             ImGui::TextDisabled("%s", TR("Session time: --:--", "مدة الجلسة: --:--"));
+        }
+        if (ImGui::Button(TR("Analyze Session (read-only)##ses_probe",
+                             "تحليل الجلسة (قراءة فقط)##ses_probe"),
+                          ImVec2(240, 30))) {
+            if (!NrthHook_IsInGame()) {
+                FeatureAction(TR("Enter the server first (mtasa://...)",
+                                 "ادخل الخادم أولًا (mtasa://...)"));
+            } else {
+                static char s_lua[2048];
+                NrthUI_BuildSessionProbeLua(s_lua, sizeof(s_lua));
+                NrthUI_ExecuteLuaViaBridge(s_lua, strlen(s_lua), 0);
+                FeatureAction(TR("Session probe sent (see game chat)",
+                                 "تم إرسال المسبار (انظر محادثة اللعبة)"));
+            }
         }
     }
     ImGui::Spacing();

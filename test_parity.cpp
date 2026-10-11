@@ -705,7 +705,20 @@ int main(void)
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
                   "session: feature state intact after stay-mode changes");
         }
-        /* 11c. headless render of the Session Lab tab (AR default + EN) */
+        /* 11c. read-only session probe chunk (runs via the Lua VM bridge) */
+        {
+            static char lua[2048];
+            NrthUI_BuildSessionProbeLua(lua, sizeof(lua));
+            CHECK(strstr(lua, "getLocalPlayer") != NULL &&
+                  strstr(lua, "getPlayerSerial") != NULL &&
+                  strstr(lua, "getPlayerPing") != NULL &&
+                  strstr(lua, "#getElementsByType('player')") != NULL &&
+                  strstr(lua, "outputChatBox") != NULL,
+                  "session: probe chunk reads own nick/serial/ping/player-count");
+            NrthUI_BuildSessionProbeLua(NULL, 0); /* must not crash */
+            CHECK(1, "session: probe builder NULL/0-safe");
+        }
+        /* 11d. headless render of the Session Lab tab (AR default + EN) */
 #ifdef NRTH_UI_HEADLESS
         {
             ImGui::CreateContext();
