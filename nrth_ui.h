@@ -1,14 +1,50 @@
 #pragma once
 /**
- * NRTH overlay UI — faithful interface reconstruction (R2) of the REAL menu.
- * Evidence: runtime screenshot (user-supplied) + NRTH.dll .rdata strings
- * (offsets 0x0e8554-0x0eb14c, see analysis/strings_catalog.txt).
- *
- * Real/local features (functional): tab structure, theme, script file listing
- * (.\lua\*.lua), config save/load (*.ovr), style color editor, keybind capture,
- * marker list, vehicle name table, status messages.
- * Game-state / netcode / Lua-VM-injection internals are class U or exploit
- * primitives and are wired to labeled stubs only (see FeatureAction).
+ * ============================================================================
+ * nrth_ui.h — DARKANARCHY (by XRAOUF) Overlay UI & MTA Packet / Feature Sync
+ * ============================================================================
+ * Features:
+ *   - Bilingual UI: Arabic (العربية with contextual shaping & RTL BiDi) + English
+ *   - Custom TTF Fonts: DarkAnarchy-English.ttf + DarkAnarchy-Arabic.ttf
+ *   - AI-Generated Logo & Background D3D9 textures ("DARKANARCHY BY XRAOUF")
+ *   - Multi-theme custom glassmorphic cyber-anarchy design
+ *   - Full MTA PACKET_ID_* catalogue, SPlayerHealthSync, SWeaponAimSync & Lua VM bridge
+ * ============================================================================
  */
-void NrthUI_ApplyTheme();   // purple theme matching the runtime screenshot
-void NrthUI_Build();        // called once per frame while menu is open
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+typedef struct _NrthPacketDef {
+    int         id;
+    const char *name;
+    bool        isReportChannel;
+} NrthPacketDef;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void NrthUI_ApplyTheme(void);
+void NrthUI_InitFonts(void);
+void NrthUI_InitTextures(void *pD3DDevice9);
+void NrthUI_ReleaseTextures(void);
+void NrthUI_Build(void);
+void NrthUI_RenderFrame(bool menuOpen);
+
+const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
+void                 NrthUI_SyncFeaturesToState(void);
+bool                 NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmMode);
+
+/* ---- Live hook callbacks (0x100047b0, 0x100050a0, 0x100052b0, 0x1001da80) */
+void     NrthUI_OnClientScriptLoaded(const char *chunkName, const char *code, size_t len);
+bool     NrthUI_ShouldBlockServerEvent(const char *eventName);
+void     NrthUI_OnResourceStarted(const char *resName);
+bool     NrthUI_OnPacketSent(unsigned char packetId);
+uint32_t NrthUI_GetMarkerCount(void);
+bool     NrthUI_GetMarkerAt(uint32_t idx, float *outX, float *outY, float *outZ);
+void     NrthUI_PushToastNotification(const char *msg);
+
+#ifdef __cplusplus
+}
+#endif

@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="ar" dir="ltr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DARKANARCHY | Developed by XRAOUF — Interactive Menu Preview</title>
+<style>
+  @font-face {
+    font-family: 'DarkAnarchyEN';
+    src: url('/assets/fonts/DarkAnarchy-English.ttf') format('truetype');
+    font-weight: 600;
+  }
+  @font-face {
+    font-family: 'DarkAnarchyAR';
+    src: url('/assets/fonts/DarkAnarchy-Arabic.ttf') format('truetype');
+    font-weight: 700;
+  }
+
+  :root {
+    --accent: #eb2456;
+    --accent-hover: #ff3a6c;
+    --secondary: #9e2ee0;
+    --panel-bg: rgba(14, 8, 24, 0.86);
+    --window-bg: rgba(10, 6, 18, 0.94);
+    --card-bg: rgba(22, 14, 36, 0.82);
+    --text-main: #f7f3fc;
+    --text-dim: #9b8fb2;
+  }
+
+  * {
+    box-sizing: border-box;
+    user-select: none;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #05030a url('/assets/darkanarchy_bg.png') center/cover no-repeat;
+    font-family: 'DarkAnarchyEN', 'DarkAnarchyAR', sans-serif;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at center, rgba(8, 4, 15, 0.45), rgba(4, 2, 8, 0.82));
+    pointer-events: none;
+  }
+
+  /* Custom Cyber Crosshair */
+  #crosshair {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 32px;
+    pointer-events: none;
+    z-index: 5;
+    display: none;
+  }
+
+  /* Watermark top-right */
+  #watermark {
+    position: fixed;
+    top: 14px;
+    right: 18px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    background: rgba(11, 6, 19, 0.92);
+    border: 1.5px solid var(--accent);
+    border-radius: 9px;
+    box-shadow: 0 0 18px rgba(235, 36, 86, 0.32);
+    font-size: 14px;
+  }
+  #watermark img {
+    width: 30px;
+    height: 18px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid var(--accent-hover);
+  }
+  .wm-brand {
+    color: var(--accent-hover);
+    font-weight: 700;
+    letter-spacing: 0.8px;
+  }
+  .wm-dev {
+    color: var(--secondary);
+    font-weight: 700;
+  }
+
+  /* Keybind floating overlay */
+  #keybind-win {
+    position: fixed;
+    top: 64px;
+    left: 18px;
+    width: 245px;
+    z-index: 20;
+    background: rgba(11, 6, 19, 0.90);
+    border: 1px solid var(--accent);
+    border-radius: 9px;
+    padding: 10px 12px;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  }
+  .kb-title {
+    color: var(--accent-hover);
+    font-size: 13px;
+    font-weight: 700;
+    border-bottom: 1px solid rgba(235, 36, 86, 0.35);
+    padding-bottom: 5px;
+    margin-bottom: 7px;
+  }
+  .kb-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 3px 0;
+  }
+
+  /* Main Menu Window */
+  #menu-window {
+    position: relative;
+    width: 950px;
+    height: 625px;
+    background: var(--window-bg);
+    border: 1.5px solid var(--accent);
+    border-radius: 13px;
+    box-shadow: 0 22px 65px rgba(0, 0, 0, 0.82), 0 0 28px rgba(235, 36, 86, 0.22);
+    display: flex;
+    padding: 14px;
+    gap: 12px;
+    overflow: hidden;
+    z-index: 10;
+  }
+
+  /* AI Background inside menu window */
+  #menu-bg-img {
+    position: absolute;
+    inset: 0;
+    background: url('/assets/darkanarchy_bg.png') center/cover no-repeat;
+    opacity: 0.34;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Top Neon Gradient Line */
+  #top-neon-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--accent-hover), var(--secondary), var(--accent-hover));
+    z-index: 4;
+  }
+
+  /* Animated Embers Canvas */
+  #embers-canvas {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    position: relative;
+    z-index: 2;
+    width: 230px;
+    background: var(--panel-bg);
+    border: 1px solid rgba(235, 36, 86, 0.36);
+    border-radius: 10px;
+    padding: 11px;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(8px);
+  }
+
+  .logo-box {
+    width: 100%;
+    height: 116px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1.5px solid var(--accent-hover);
+    margin-bottom: 8px;
+    box-shadow: 0 0 16px rgba(235, 36, 86, 0.35);
+    flex-shrink: 0;
+  }
+  .logo-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .brand-title {
+    font-family: 'DarkAnarchyEN', sans-serif;
+    font-size: 21px;
+    font-weight: 700;
+    color: var(--accent-hover);
+    letter-spacing: 1px;
+    line-height: 1.1;
+  }
+  .brand-dev {
+    font-size: 14px;
+    color: var(--secondary);
+    font-weight: 700;
+    margin-top: 2px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(235, 36, 86, 0.32);
+    margin-bottom: 8px;
+  }
+
+  .nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    flex: 1;
+  }
+
+  .nav-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    background: rgba(20, 12, 34, 0.78);
+    border: 1px solid rgba(235, 36, 86, 0.16);
+    cursor: pointer;
+    transition: all 0.16s ease;
+  }
+  .nav-btn:hover {
+    background: rgba(235, 36, 86, 0.16);
+    border-color: rgba(235, 36, 86, 0.45);
+  }
+  .nav-btn.active {
+    background: rgba(235, 36, 86, 0.25);
+    border-color: var(--accent-hover);
+    box-shadow: inset 4px 0 0 var(--accent-hover);
+  }
+  .nav-badge {
+    width: 34px;
+    height: 30px;
+    border-radius: 6px;
+    background: rgba(42, 26, 66, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .nav-btn.active .nav-badge {
+    background: var(--accent);
+  }
+  .nav-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .nav-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .nav-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .nav-btn.active .nav-sub {
+    color: var(--accent-hover);
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid rgba(235, 36, 86, 0.32);
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .lang-switch-btn {
+    width: 100%;
+    padding: 7px;
+    border-radius: 7px;
+    border: 1px solid var(--accent-hover);
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .lang-switch-btn:hover {
+    background: var(--accent-hover);
+  }
+  .footer-credit {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  /* Right Main Workspace */
+  .workspace {
+    position: relative;
+    z-index: 2;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .header-bar {
+    height: 50px;
+    background: var(--panel-bg);
+    border: 1px solid rgba(235, 36, 86, 0.36);
+    border-radius: 9px;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    backdrop-filter: blur(8px);
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 15px;
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pill-btn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(235, 36, 86, 0.45);
+    background: rgba(34, 18, 54, 0.9);
+    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .pill-btn:hover, .pill-btn.active {
+    background: var(--accent);
+    border-color: var(--accent-hover);
+  }
+
+  /* Subtabs row */
+  .subtabs-row {
+    display: flex;
+    gap: 8px;
+  }
+  .subtab-btn {
+    flex: 1;
+    padding: 7px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(235, 36, 86, 0.28);
+    background: rgba(20, 12, 34, 0.85);
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .subtab-btn:hover {
+    background: rgba(235, 36, 86, 0.3);
+  }
+  .subtab-btn.active {
+    background: var(--accent);
+    border-color: var(--accent-hover);
+    box-shadow: 0 0 12px rgba(235, 36, 86, 0.35);
+  }
+
+  /* Content Panel */
+  .content-panel {
+    flex: 1;
+    background: var(--panel-bg);
+    border: 1px solid rgba(235, 36, 86, 0.36);
+    border-radius: 10px;
+    padding: 13px;
+    overflow-y: auto;
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .section-heading {
+    color: var(--accent-hover);
+    font-size: 15px;
+    font-weight: 700;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(235, 36, 86, 0.32);
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+  }
+
+  .feature-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-radius: 7px;
+    background: var(--card-bg);
+    border: 1px solid rgba(235, 36, 86, 0.20);
+    transition: 0.15s;
+  }
+  .feature-card.on {
+    background: rgba(235, 36, 86, 0.18);
+    border-color: var(--accent-hover);
+  }
+  .fc-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+  }
+
+  /* Pill Switch */
+  .switch {
+    width: 38px;
+    height: 20px;
+    border-radius: 10px;
+    background: #281b3d;
+    border: 1px solid rgba(235, 36, 86, 0.3);
+    position: relative;
+    transition: 0.18s;
+    flex-shrink: 0;
+  }
+  .feature-card.on .switch {
+    background: var(--accent);
+    border-color: var(--accent-hover);
+  }
+  .switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: 0.18s;
+  }
+  .feature-card.on .switch::after {
+    left: 19px;
+  }
+
+  .fc-label {
+    font-size: 14.5px;
+    font-weight: 600;
+  }
+  .feature-card.on .fc-label {
+    color: var(--accent-hover);
+  }
+
+  .cfg-mini-btn {
+    padding: 3px 8px;
+    font-size: 12px;
+    border-radius: 5px;
+    background: rgba(38, 22, 58, 0.9);
+    border: 1px solid rgba(235, 36, 86, 0.35);
+    color: var(--text-main);
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .cfg-mini-btn:hover {
+    background: var(--accent);
+  }
+
+  .quick-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid rgba(235, 36, 86, 0.28);
+  }
+  .qa-btn {
+    flex: 1;
+    padding: 8px;
+    border-radius: 7px;
+    border: 1px solid var(--accent-hover);
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .qa-btn:hover {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+  }
+
+  /* Lua Editor */
+  .lua-editor-area {
+    width: 100%;
+    height: 230px;
+    background: rgba(8, 4, 15, 0.92);
+    border: 1px solid rgba(235, 36, 86, 0.38);
+    border-radius: 8px;
+    color: #f8f2ff;
+    font-family: 'DarkAnarchyEN', monospace;
+    font-size: 14px;
+    padding: 10px;
+    resize: none;
+    outline: none;
+  }
+  .lua-console {
+    flex: 1;
+    background: rgba(6, 3, 12, 0.9);
+    border: 1px solid rgba(235, 36, 86, 0.28);
+    border-radius: 8px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    color: #c7b8e6;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+
+  /* Toast Container */
+  #toast-container {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 8px;
+    z-index: 50;
+  }
+  .toast {
+    width: 285px;
+    background: rgba(12, 7, 22, 0.95);
+    border: 1px solid var(--accent-hover);
+    border-radius: 8px;
+    padding: 9px 12px 12px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.7);
+    position: relative;
+    overflow: hidden;
+  }
+  .toast-title {
+    color: var(--accent-hover);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .toast-msg {
+    font-size: 13.5px;
+    margin-top: 2px;
+  }
+  .toast-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: var(--accent-hover);
+    width: 100%;
+    animation: shrink 3.2s linear forwards;
+  }
+  @keyframes shrink {
+    from { width: 100%; }
+    to { width: 0%; }
+  }
+
+  .cfg-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0;
+    flex-wrap: wrap;
+  }
+  select, input[type="text"] {
+    background: rgba(16, 9, 28, 0.95);
+    border: 1px solid rgba(235, 36, 86, 0.45);
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13.5px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Custom Cyber Crosshair -->
+<svg id="crosshair" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="8" fill="none" stroke="var(--secondary)" stroke-width="1.5"/>
+  <line x1="2" y1="16" x2="11" y2="16" stroke="var(--accent-hover)" stroke-width="2"/>
+  <line x1="21" y1="16" x2="30" y2="16" stroke="var(--accent-hover)" stroke-width="2"/>
+  <line x1="16" y1="2" x2="16" y2="11" stroke="var(--accent-hover)" stroke-width="2"/>
+  <line x1="16" y1="21" x2="16" y2="30" stroke="var(--accent-hover)" stroke-width="2"/>
+  <circle cx="16" cy="16" r="2" fill="#fff"/>
+</svg>
+
+<!-- Top-Right Watermark -->
+<div id="watermark">
+  <img src="/assets/darkanarchy_logo.png" alt="Logo" />
+  <span class="wm-brand">DARKANARCHY</span>
+  <span class="wm-dev">| DEV: XRAOUF |</span>
+  <span id="wm-status">FPS: 144 | متصل بالسيرفر</span>
+</div>
+
+<!-- Floating Keybind List -->
+<div id="keybind-win">
+  <div class="kb-title" id="kb-header">اختصارات DARKANARCHY</div>
+  <div id="kb-body"></div>
+</div>
+
+<!-- Main DARKANARCHY Menu Window -->
+<div id="menu-window">
+  <div id="menu-bg-img"></div>
+  <div id="top-neon-line"></div>
+  <canvas id="embers-canvas" width="950" height="625"></canvas>
+
+  <!-- Left Sidebar -->
+  <div class="sidebar">
+    <div class="logo-box" id="logo-box">
+      <img src="/assets/darkanarchy_logo.png" alt="DARKANARCHY BY XRAOUF" />
+    </div>
+    <div class="brand-title">DARKANARCHY</div>
+    <div class="brand-dev" id="sidebar-dev">المطور: XRAOUF</div>
+
+    <div class="nav-list" id="nav-list"></div>
+
+    <div class="sidebar-footer">
+      <button class="lang-switch-btn" onclick="toggleLang()" id="sidebar-lang-btn">
+        اللغة: العربية ⇄ English
+      </button>
+      <div class="footer-credit">CRAFTED BY XRAOUF • TTF AR+EN v4.0</div>
+    </div>
+  </div>
+
+  <!-- Right Main Workspace -->
+  <div class="workspace">
+    <div class="header-bar">
+      <div class="header-left">
+        <span class="brand-title" style="font-size:19px;">DARKANARCHY</span>
+        <span style="color:var(--text-dim)">|</span>
+        <span style="color:var(--secondary);font-weight:700;" id="hdr-dev">تطوير XRAOUF</span>
+        <span style="color:var(--text-dim)">|</span>
+        <span id="hdr-status" style="color:#ded8f0;">الخطوط: TTF عربي + إنجليزي نشط</span>
+      </div>
+      <div class="header-actions">
+        <button class="pill-btn active" onclick="toggleLang()" id="top-lang-btn">عربي / EN</button>
+      </div>
+    </div>
+
+    <div class="subtabs-row" id="subtabs-row"></div>
+    <div class="content-panel" id="content-panel"></div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+  let lang = 0; // 0 = Arabic, 1 = English
+  let topTab = 2; // Default open on Cheat tab to show features immediately
+  let scriptsSub = 0;
+  let cheatSub = 1;
+  let showParticles = true;
+
+  const navItems = [
+    { badge: 'LUA', en: 'Scripts',  ar: 'السكربتات',    enSub: 'Executor & Hooks', arSub: 'منفذ لوا والأحداث' },
+    { badge: 'DMP', en: 'Dumper',   ar: 'ساحب الملفات', enSub: 'Client Extractor', arSub: 'استخراج السكربتات' },
+    { badge: 'CHT', en: 'Cheat',    ar: 'خصائص الغش',  enSub: 'Player & Combat',  arSub: 'اللاعب والقتال' },
+    { badge: 'VEH', en: 'Vehicle',  ar: 'المركبات',     enSub: 'Mods & Spawner',   arSub: 'تعديل المركبات' },
+    { badge: 'CFG', en: 'Config',   ar: 'الإعدادات',    enSub: 'Theme & Language', arSub: 'المظهر واللغة' },
+  ];
+
+  const cheatFeatures = [
+    { en: 'GodMode',         ar: 'وضع الخلود (GodMode)',   on: true,  key: 'F1' },
+    { en: 'Give HP',         ar: 'إعطاء صحة (HP)',         on: true,  key: '' },
+    { en: 'Give Armor',      ar: 'إعطاء درع (Armor)',      on: false, key: '' },
+    { en: 'Infinite Ammo',   ar: 'ذخيرة لا نهائية',        on: true,  key: '' },
+    { en: 'Anti-Spread',     ar: 'ثبات السلاح',            on: true,  key: '' },
+    { en: 'Anti-ScreenShot', ar: 'حماية الشاشة (Anti-SS)', on: true,  key: '' },
+    { en: 'Crasher',         ar: 'كراشر السيرفر',          on: false, key: '' },
+    { en: 'Anti-AFK',        ar: 'مانع الخمول (AFK)',      on: false, key: '' },
+    { en: 'AirBreak',        ar: 'طيران حر (AirBreak)',    on: true,  key: 'RSHIFT' },
+    { en: 'Click Warp',      ar: 'انتقال بالماوس',         on: true,  key: 'MBUTTON' },
+    { en: 'High Jump',       ar: 'قفزة خارقة',             on: false, key: '' },
+    { en: 'Money Exploit',   ar: 'ثغرة الأموال (Money)',   on: true,  key: '' },
+    { en: 'Jetpack',         ar: 'حقيبة نفاثة (Jetpack)',  on: false, key: 'J' },
+    { en: 'All Weapons',     ar: 'جميع الأسلحة',           on: true,  key: '' },
+  ];
+
+  const vehicleFeatures = [
+    { en: 'Vehicle GodMode', ar: 'خلود المركبة',          on: true },
+    { en: 'Vehicle Chaos',   ar: 'فوضى المركبات',         on: false },
+    { en: 'Drive Water',     ar: 'القيادة على الماء',     on: true },
+    { en: 'Fast Stop',       ar: 'توقف فوري سريع',        on: false },
+    { en: 'Fall Bike',       ar: 'عدم السقوط من الدراجة', on: true },
+    { en: 'Flying Car',      ar: 'طيران المركبة',         on: false },
+    { en: 'Start Engine',    ar: 'تشغيل المحرك',          on: true },
+    { en: 'Repair Car',      ar: 'إصلاح المركبة',         on: false },
+    { en: 'Unlock Car',      ar: 'فتح قفل المركبات',      on: true },
+  ];
+
+  function tr(en, ar) {
+    return lang === 0 ? ar : en;
+  }
+
+  function pushToast(msg) {
+    const c = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.innerHTML = `<div class="toast-title">DARKANARCHY | XRAOUF</div><div class="toast-msg">${msg}</div><div class="toast-bar"></div>`;
+    c.appendChild(el);
+    setTimeout(() => el.remove(), 3200);
+  }
+
+  function toggleLang() {
+    lang = lang === 0 ? 1 : 0;
+    renderAll();
+    pushToast(tr('Language switched to English', 'تم تحويل لغة القائمة إلى العربية'));
+  }
+
+  function applyTheme(preset) {
+    const r = document.documentElement.style;
+    const themes = [
+      { a: '#eb2456', ah: '#ff3a6c', s: '#9e2ee0' }, // 0: Dark Anarchy
+      { a: '#f2142e', ah: '#ff384d', s: '#990a1e' }, // 1: Blood Moon
+      { a: '#9438f5', ah: '#b35cff', s: '#eb2ea3' }, // 2: Abyss Violet
+      { a: '#f2ad24', ah: '#ffc747', s: '#d9521e' }, // 3: XRAOUF Gold
+      { a: '#0ddb94', ah: '#2ef5ae', s: '#0f8ce6' }, // 4: Cyber Matrix
+    ];
+    const t = themes[preset] || themes[0];
+    r.setProperty('--accent', t.a);
+    r.setProperty('--accent-hover', t.ah);
+    r.setProperty('--secondary', t.s);
+    pushToast(tr('Theme updated', 'تم تحديث ثيم الألوان'));
+  }
+
+  function renderKeybinds() {
+    document.getElementById('kb-header').textContent = tr('DARKANARCHY Keybinds', 'اختصارات DARKANARCHY');
+    const body = document.getElementById('kb-body');
+    body.innerHTML = '';
+    cheatFeatures.filter(f => f.key).forEach(f => {
+      const row = document.createElement('div');
+      row.className = 'kb-row';
+      row.innerHTML = `<span>${lang === 0 ? f.ar : f.en} [${f.key}]</span><span style="color:${f.on ? 'var(--accent-hover)' : '#776b8f'};font-weight:700;">${f.on ? 'ON' : 'OFF'}</span>`;
+      body.appendChild(row);
+    });
+  }
+
+  function renderAll() {
+    document.getElementById('sidebar-dev').textContent = tr('DEVELOPER: XRAOUF', 'المطور: XRAOUF');
+    document.getElementById('hdr-dev').textContent = tr('BY XRAOUF', 'تطوير XRAOUF');
+    document.getElementById('hdr-status').textContent = tr('TTF Fonts: English + Arabic Active', 'الخطوط: TTF عربي + إنجليزي نشط');
+    document.getElementById('wm-status').textContent = tr('FPS: 144 | Server Connected', 'FPS: 144 | متصل بالسيرفر');
+    document.getElementById('sidebar-lang-btn').textContent = tr('Lang: English -> العربية', 'اللغة: العربية -> English');
+
+    // Sidebar Nav
+    const navEl = document.getElementById('nav-list');
+    navEl.innerHTML = '';
+    navItems.forEach((it, idx) => {
+      const b = document.createElement('div');
+      b.className = 'nav-btn' + (topTab === idx ? ' active' : '');
+      b.onclick = () => { topTab = idx; renderAll(); };
+      b.innerHTML = `
+        <div class="nav-badge">${it.badge}</div>
+        <div class="nav-text">
+          <span class="nav-title">${lang === 0 ? it.ar : it.en}</span>
+          <span class="nav-sub">${lang === 0 ? it.arSub : it.enSub}</span>
+        </div>
+      `;
+      navEl.appendChild(b);
+    });
+
+    // Subtabs
+    const subRow = document.getElementById('subtabs-row');
+    subRow.innerHTML = '';
+    if (topTab === 0) {
+      const subs = [
+        { en: 'Editor', ar: 'المحرر' },
+        { en: 'Scripts', ar: 'السكربتات' },
+        { en: 'Resources', ar: 'الموارد' },
+        { en: 'Events', ar: 'الأحداث' },
+        { en: 'Events Table', ar: 'جدول الأحداث' },
+        { en: 'Packets', ar: 'الحزم' },
+      ];
+      subs.forEach((s, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'subtab-btn' + (scriptsSub === i ? ' active' : '');
+        btn.textContent = lang === 0 ? s.ar : s.en;
+        btn.onclick = () => { scriptsSub = i; renderAll(); };
+        subRow.appendChild(btn);
+      });
+    } else if (topTab === 2) {
+      const subs = [
+        { en: 'Player', ar: 'اللاعبين' },
+        { en: 'Features', ar: 'خصائص الغش' },
+        { en: 'Markers', ar: 'الإحداثيات' },
+      ];
+      subs.forEach((s, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'subtab-btn' + (cheatSub === i ? ' active' : '');
+        btn.textContent = lang === 0 ? s.ar : s.en;
+        btn.onclick = () => { cheatSub = i; renderAll(); };
+        subRow.appendChild(btn);
+      });
+    }
+
+    // Content Panel
+    const cp = document.getElementById('content-panel');
+    cp.innerHTML = '';
+
+    if (topTab === 0) {
+      cp.innerHTML = `
+        <div class="section-heading">${tr('DARKANARCHY LUA EXECUTOR | BY XRAOUF', 'منفذ سكربتات لوا الاحترافي | تطوير XRAOUF')}</div>
+        <textarea class="lua-editor-area" id="lua-code">-- ==========================================
+-- DARKANARCHY LUA EXECUTOR | DEV: XRAOUF
+-- ==========================================
+print("DARKANARCHY by XRAOUF initialized!")
+outputChatBox("[DARKANARCHY] Menu loaded successfully!", 235, 36, 86, true)</textarea>
+        <div class="cfg-row">
+          <button class="qa-btn" style="flex:0 0 160px;" onclick="pushToast(tr('Script executed on Default VM', 'تم تنفيذ السكربت بنجاح'))">${tr('Execute Script', 'تنفيذ السكربت')}</button>
+          <select><option>Default VM (@custom)</option><option> Resource: hud (0x1013BF04)</option></select>
+        </div>
+        <div class="lua-console">[DARKANARCHY] Ready — Lua 5.4.6 + MTA Bridge (@custom) active.</div>
+      `;
+    } else if (topTab === 1) {
+      cp.innerHTML = `
+        <div class="section-heading">${tr('CLIENT SCRIPT DUMPER & ENGINE OFFSETS', 'ساحب ملفات السيرفر وعناوين المحرك')}</div>
+        <div class="lua-console">@:hud/client.lua (1,420 bytes) — [OK]
+@:admin/client_ac.lua (4,812 bytes) — [OK]
+@:vehicles/handling.lua (2,190 bytes) — [OK]
+
+Resolved Client Offsets (20/20):
+0x10002FF0 (#01 ok) | 0x100047B0 (#02 ok) | 0x100050A0 (#03 ok) | 0x100052B0 (#04 ok)</div>
+        <div class="quick-actions">
+          <button class="qa-btn" onclick="pushToast(tr('All scripts dumped to C:\\\\DARKANARCHY\\\\dump', 'تم حفظ جميع السكربتات بنجاح'))">${tr('Dump All Scripts', 'سحب وحفظ جميع السكربتات')}</button>
+        </div>
+      `;
+    } else if (topTab === 2) {
+      const heading = document.createElement('div');
+      heading.className = 'section-heading';
+      heading.textContent = tr('PLAYER & COMBAT MODULES  |  BY XRAOUF', 'خصائص اللاعب والقتال  |  تطوير XRAOUF');
+      cp.appendChild(heading);
+
+      const grid = document.createElement('div');
+      grid.className = 'features-grid';
+      cheatFeatures.forEach((f, idx) => {
+        const card = document.createElement('div');
+        card.className = 'feature-card' + (f.on ? ' on' : '');
+        card.innerHTML = `
+          <div class="fc-left">
+            <div class="switch"></div>
+            <span class="fc-label">${lang === 0 ? f.ar : f.en}</span>
+          </div>
+          <button class="cfg-mini-btn">${tr('CFG', 'ضبط')}</button>
+        `;
+        card.querySelector('.fc-left').onclick = () => {
+          f.on = !f.on;
+          renderAll();
+          pushToast(`${lang === 0 ? f.ar : f.en}: ${f.on ? tr('ENABLED', 'تم التفعيل') : tr('DISABLED', 'تم الإيقاف')}`);
+        };
+        grid.appendChild(card);
+      });
+      cp.appendChild(grid);
+
+      const qa = document.createElement('div');
+      qa.className = 'quick-actions';
+      const actions = [
+        { en: 'Give All Weapons', ar: 'إعطاء جميع الأسلحة' },
+        { en: 'Toggle High Jump', ar: 'القفزة الخارقة' },
+        { en: 'Money Exploit (+50K)', ar: 'ثغرة الأموال (+50K)' },
+        { en: 'Toggle Jetpack', ar: 'الحقيبة النفاثة' },
+      ];
+      actions.forEach(a => {
+        const b = document.createElement('button');
+        b.className = 'qa-btn';
+        b.textContent = lang === 0 ? a.ar : a.en;
+        b.onclick = () => pushToast(lang === 0 ? a.ar : a.en);
+        qa.appendChild(b);
+      });
+      cp.appendChild(qa);
+    } else if (topTab === 3) {
+      const heading = document.createElement('div');
+      heading.className = 'section-heading';
+      heading.textContent = tr('VEHICLE MODIFICATIONS & SPAWNER  |  BY XRAOUF', 'خصائص وتعديلات المركبات  |  تطوير XRAOUF');
+      cp.appendChild(heading);
+
+      const grid = document.createElement('div');
+      grid.className = 'features-grid';
+      vehicleFeatures.forEach(f => {
+        const card = document.createElement('div');
+        card.className = 'feature-card' + (f.on ? ' on' : '');
+        card.innerHTML = `
+          <div class="fc-left">
+            <div class="switch"></div>
+            <span class="fc-label">${lang === 0 ? f.ar : f.en}</span>
+          </div>
+          <button class="cfg-mini-btn">${tr('CFG', 'ضبط')}</button>
+        `;
+        card.querySelector('.fc-left').onclick = () => {
+          f.on = !f.on;
+          renderAll();
+          pushToast(`${lang === 0 ? f.ar : f.en}: ${f.on ? tr('ENABLED', 'تم التفعيل') : tr('DISABLED', 'تم الإيقاف')}`);
+        };
+        grid.appendChild(card);
+      });
+      cp.appendChild(grid);
+
+      const qa = document.createElement('div');
+      qa.className = 'quick-actions';
+      ['إصلاح المركبة (Repair)', 'تشغيل المحرك (Engine)', 'فتح أقرب مركبة (Unlock)', 'تفجير المركبة (Bomb)'].forEach(lbl => {
+        const b = document.createElement('button');
+        b.className = 'qa-btn';
+        b.textContent = lbl;
+        b.onclick = () => pushToast(lbl);
+        qa.appendChild(b);
+      });
+      cp.appendChild(qa);
+    } else {
+      cp.innerHTML = `
+        <div class="section-heading">${tr('LANGUAGE, TTF FONTS & THEME SETTINGS (DARKANARCHY BY XRAOUF)', 'إعدادات اللغة والخطوط والمظهر الاحترافي (DARKANARCHY BY XRAOUF)')}</div>
+        <div class="cfg-row">
+          <button class="qa-btn" onclick="lang=0;renderAll();pushToast('تم تفعيل اللغة العربية')">اللغة العربية (Arabic TTF)</button>
+          <button class="qa-btn" onclick="lang=1;renderAll();pushToast('Switched to English TTF')">English Language (English TTF)</button>
+        </div>
+        <div class="cfg-row">
+          <span>${tr('Theme Preset:', 'ثيم الألوان:')}</span>
+          <select onchange="applyTheme(this.selectedIndex)">
+            <option>1. Dark Anarchy (Crimson & Cyber Violet)</option>
+            <option>2. Blood Moon (Pure Crimson & Onyx)</option>
+            <option>3. Abyss Violet (Neon Amethyst)</option>
+            <option>4. XRAOUF Gold (Imperial Gold & Carbon)</option>
+            <option>5. Cyber Matrix (Neon Emerald)</option>
+          </select>
+        </div>
+        <div class="cfg-row">
+          <label><input type="checkbox" checked onchange="document.getElementById('menu-bg-img').style.display=this.checked?'block':'none'"> ${tr('Show AI Background', 'إظهار خلفية الذكاء الاصطناعي')}</label>
+          <label><input type="checkbox" checked onchange="document.getElementById('logo-box').style.display=this.checked?'block':'none'"> ${tr('Show AI Logo', 'إظهار شعار DARKANARCHY')}</label>
+          <label><input type="checkbox" checked onchange="showParticles=this.checked"> ${tr('Animated Cyber Embers', 'مؤثرات الجزيئات المتحركة')}</label>
+          <label><input type="checkbox" onchange="document.getElementById('crosshair').style.display=this.checked?'block':'none'"> ${tr('Custom Cyber Crosshair', 'مؤشر تصويب مخصص')}</label>
+          <label><input type="checkbox" onchange="document.getElementById('keybind-win').style.display=this.checked?'block':'none'"> ${tr('Show Keybinds Overlay', 'إظهار نافذة الاختصارات')}</label>
+        </div>
+        <div class="cfg-row">
+          <span>${tr('Background Opacity:', 'شفافية الخلفية:')}</span>
+          <input type="range" min="5" max="85" value="34" oninput="document.getElementById('menu-bg-img').style.opacity=this.value/100">
+        </div>
+        <div class="lua-console">DARKANARCHY v4.0 | DEVELOPED BY XRAOUF
+- English TTF : assets/fonts/DarkAnarchy-English.ttf (ChakraPetch SemiBold)
+- Arabic TTF  : assets/fonts/DarkAnarchy-Arabic.ttf (Tajawal Bold + Presentation Forms A/B)
+- Binary DLL  : bin/DARKANARCHY.dll (PE32 x86, DirectX 9 Overlay, 18 Hooks, 6 Patches)
+- Loader EXE  : bin/DARKANARCHY LOADER.exe</div>
+      `;
+    }
+
+    renderKeybinds();
+  }
+
+  // Animated Cyber Embers
+  const cvs = document.getElementById('embers-canvas');
+  const ctx = cvs.getContext('2d');
+  const particles = Array.from({ length: 26 }, (_, i) => ({
+    x: Math.random() * 950,
+    y: Math.random() * 625,
+    r: 1.4 + (i % 3) * 0.8,
+    vy: 0.4 + Math.random() * 0.7,
+    vx: (Math.random() - 0.5) * 0.4,
+    c: i % 2 === 0 ? '#ff3a6c' : '#9e2ee0'
+  }));
+
+  function animateEmbers() {
+    ctx.clearRect(0, 0, 950, 625);
+    if (showParticles) {
+      particles.forEach(p => {
+        p.y -= p.vy;
+        p.x += p.vx;
+        if (p.y < 0) p.y = 625;
+        if (p.x < 0) p.x = 950;
+        if (p.x > 950) p.x = 0;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = p.c;
+        ctx.globalAlpha = 0.32;
+        ctx.fill();
+      });
+    }
+    requestAnimationFrame(animateEmbers);
+  }
+
+  renderAll();
+  animateEmbers();
+</script>
+</body>
+</html>
