@@ -2266,6 +2266,7 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;
     NrthUI_ApplyTheme();
+    NrthUI_InitFonts();
     if (!ImGui_ImplWin32_Init(g_hGameWnd)) {
         return;
     }
@@ -2273,6 +2274,7 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
         ImGui_ImplWin32_Shutdown();
         return;
     }
+    NrthUI_InitTextures(pDevice);
 
     /* Subclass game window with SetWindowLongW (matches 0x100154df in NRTH.dll) */
     g_pOrigWndProc = (WNDPROC)SetWindowLongW(g_hGameWnd, GWL_WNDPROC, (LONG)GameWndProc);
@@ -2356,11 +2358,13 @@ static HRESULT WINAPI Hooked_Present(IDirect3DDevice9 *pDevice, const RECT *pSrc
 static HRESULT WINAPI Hooked_Reset(IDirect3DDevice9 *pDevice, D3DPRESENT_PARAMETERS *pParams)
 {
     if (g_bOverlayInit) {
+        NrthUI_ReleaseTextures();
         ImGui_ImplDX9_InvalidateDeviceObjects();
     }
     HRESULT hr = g_pOrigReset(pDevice, pParams);
     if (SUCCEEDED(hr) && g_bOverlayInit) {
         ImGui_ImplDX9_CreateDeviceObjects();
+        NrthUI_InitTextures(pDevice);
     }
     return hr;
 }

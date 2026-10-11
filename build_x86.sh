@@ -39,7 +39,7 @@ for f in nrth_config.cpp nrth_hook.cpp nrth_ui.cpp; do
         -c "$f" -o "build_obj/$(basename "$f" .cpp).o"
 done
 
-echo "[*] Linking bin/nvx.dll and publishing bin/NRTH.dll..."
+echo "[*] Linking bin/nvx.dll, bin/NRTH.dll, and bin/DARKANARCHY.dll..."
 "$ZIG" c++ -target x86-windows-gnu -shared -O2 -s \
     -Wl,--image-base,0x10000000 -Wl,--subsystem,console \
     build_obj/nrth_hook.o build_obj/nrth_config.o build_obj/nrth_ui.o \
@@ -49,12 +49,15 @@ echo "[*] Linking bin/nvx.dll and publishing bin/NRTH.dll..."
     -ld3d9 -luser32 -lgdi32 -ladvapi32 -lpsapi -ldwmapi \
     -o bin/nvx.dll
 cp bin/nvx.dll bin/NRTH.dll
+cp bin/nvx.dll bin/DARKANARCHY.dll
+cp bin/nvx.dll NRTH.dll
 
-echo "[*] Building bin/NORTH LOADER.exe (x86-windows-gnu)..."
+echo "[*] Building bin/NORTH LOADER.exe and bin/DARKANARCHY LOADER.exe (x86-windows-gnu)..."
 "$ZIG" c++ -target x86-windows-gnu -std=c++17 -O2 -s \
     -Wl,--subsystem,console \
     north_loader.cpp -ladvapi32 -luser32 -lpsapi \
     -o "bin/NORTH LOADER.exe"
+cp "bin/NORTH LOADER.exe" "bin/DARKANARCHY LOADER.exe"
 
 echo "[*] Building bin/NRTH_audit.dll (x86-windows-gnu)..."
 "$ZIG" c++ -target x86-windows-gnu -std=c++17 -shared -O2 -s \

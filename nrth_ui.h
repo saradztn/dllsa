@@ -1,19 +1,14 @@
 #pragma once
 /**
  * ============================================================================
- * nrth_ui.h — NRTH overlay UI & MTA Packet / Feature Sync interface
+ * nrth_ui.h — DARKANARCHY (by XRAOUF) Overlay UI & MTA Packet / Feature Sync
  * ============================================================================
- * Evidence:
- *   - Window title "North Cheat" (VA 0x100ea0d8)
- *   - Top tabs "%s##nvx_top_%d": Scripts | Dumper | Cheat | Vehicle | Config
- *   - PACKET_ID_* table (.rdata 0x100e9be4..0x100eaaa4, including
- *     PACKET_ID_CHEAT_CHALLENGEMEMORY at 0x100eb6a8)
- *   - Report channels: PLAYER_SCREENSHOT, PLAYER_TRANSGRESSION,
- *     PLAYER_DIAGNOSTIC, PLAYER_ACINFO
- *   - Sync structs: SPlayerHealthSync, SWeaponAimSync
- *   - Lua VM bridge: 0x1013bf04 (stride 0x1C, L at +0x18), default_L 0x1013c95c,
- *     loadbuffer 0x1013c94c ("@custom"), pcall 0x1013c974, flag 0x1013c939,
- *     script buffer 0x1013beec, VirtualQuery pointer guard.
+ * Features:
+ *   - Bilingual UI: Arabic (العربية with contextual shaping & RTL BiDi) + English
+ *   - Custom TTF Fonts: DarkAnarchy-English.ttf + DarkAnarchy-Arabic.ttf
+ *   - AI-Generated Logo & Background D3D9 textures ("DARKANARCHY BY XRAOUF")
+ *   - Multi-theme custom glassmorphic cyber-anarchy design
+ *   - Full MTA PACKET_ID_* catalogue, SPlayerHealthSync, SWeaponAimSync & Lua VM bridge
  * ============================================================================
  */
 #include <stdint.h>
@@ -31,6 +26,9 @@ extern "C" {
 #endif
 
 void NrthUI_ApplyTheme(void);
+void NrthUI_InitFonts(void);
+void NrthUI_InitTextures(void *pD3DDevice9);
+void NrthUI_ReleaseTextures(void);
 void NrthUI_Build(void);
 void NrthUI_RenderFrame(bool menuOpen);
 
