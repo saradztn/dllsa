@@ -1572,43 +1572,42 @@ extern "C" bool Nrth_StopClientResource_100054a0(const char *resName)
 extern "C" void Nrth_TickGameFeatures_10015812(void)
 {
 #if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
-    /* 1. Direct GTA:SA global cheat flags:
+    /* Match 0x10015812 in NRTH.dll: do not touch GTA:SA memory until CClientGame (0x10148ee8) is active */
+    if (!g_pClientGame_10148ee8) {
+        return;
+    }
+
+    uintptr_t pPed = GetLocalPed_00B6F5F0();
+    if (!pPed) {
+        return;
+    }
+
+    /* 1. Direct GTA:SA global cheat flags (only written in-game at 0x10015a7a..0x10015a8a):
      *    0x00969160 = bDriveOnWater (0x10015a7a)
-     *    0x00969152 = bCarsCanFly   (0x10015a8a)
-     *    0x0096916C = bMegaJump     (0x1002a65f)
-     *    0x00969178 = bInfiniteAmmo */
+     *    0x00969152 = bCarsCanFly   (0x10015a8a) */
     if (IsAddressWritable((void *)(uintptr_t)0x00969160u, 1)) {
         *(uint8_t *)(uintptr_t)0x00969160u = g_PlayerHealthSync.bDriveWater ? 1u : 0u;
     }
     if (IsAddressWritable((void *)(uintptr_t)0x00969152u, 1)) {
         *(uint8_t *)(uintptr_t)0x00969152u = g_PlayerHealthSync.bFlyingCar ? 1u : 0u;
     }
-    if (IsAddressWritable((void *)(uintptr_t)0x0096916Cu, 1)) {
-        *(uint8_t *)(uintptr_t)0x0096916Cu = g_PlayerHealthSync.bHighJump ? 1u : 0u;
-    }
-    if (IsAddressWritable((void *)(uintptr_t)0x00969178u, 1)) {
-        *(uint8_t *)(uintptr_t)0x00969178u = g_PlayerHealthSync.bInfiniteAmmo ? 1u : 0u;
-    }
 
     /* 2. Local player ped (0x00B6F5F0): Give HP, Give Armor, GodMode */
-    uintptr_t pPed = GetLocalPed_00B6F5F0();
-    if (pPed) {
-        if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveHp) &&
-            IsAddressWritable((void *)(pPed + 0x540u), sizeof(float))) {
-            float targetHp = g_PlayerHealthSync.fHealth > 0.0f ? g_PlayerHealthSync.fHealth : 100.0f;
-            if (g_PlayerHealthSync.bGodMode && targetHp < 100.0f) {
-                targetHp = 100.0f;
-            }
-            *(float *)(pPed + 0x540u) = targetHp;
+    if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveHp) &&
+        IsAddressWritable((void *)(pPed + 0x540u), sizeof(float))) {
+        float targetHp = g_PlayerHealthSync.fHealth > 0.0f ? g_PlayerHealthSync.fHealth : 100.0f;
+        if (g_PlayerHealthSync.bGodMode && targetHp < 100.0f) {
+            targetHp = 100.0f;
         }
-        if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveArmor) &&
-            IsAddressWritable((void *)(pPed + 0x548u), sizeof(float))) {
-            float targetAr = g_PlayerHealthSync.fArmor > 0.0f ? g_PlayerHealthSync.fArmor : 100.0f;
-            if (g_PlayerHealthSync.bGodMode && targetAr < 100.0f) {
-                targetAr = 100.0f;
-            }
-            *(float *)(pPed + 0x548u) = targetAr;
+        *(float *)(pPed + 0x540u) = targetHp;
+    }
+    if ((g_PlayerHealthSync.bGodMode || g_PlayerHealthSync.bGiveArmor) &&
+        IsAddressWritable((void *)(pPed + 0x548u), sizeof(float))) {
+        float targetAr = g_PlayerHealthSync.fArmor > 0.0f ? g_PlayerHealthSync.fArmor : 100.0f;
+        if (g_PlayerHealthSync.bGodMode && targetAr < 100.0f) {
+            targetAr = 100.0f;
         }
+        *(float *)(pPed + 0x548u) = targetAr;
     }
 
     /* 3. Current vehicle (0x00BA18FC): Vehicle God-Mode, Fast Stop, Repair, Start Engine, Unlock */
@@ -1897,44 +1896,56 @@ static void ArmNetc_Live_10020640(uint8_t *moduleBase, uint32_t moduleSize)
 {
     if (!moduleBase || moduleSize == 0) return;
 
-    /* 6 direct patch patterns from 0x1013b750..0x1013bc50 in NRTH.dll */
+    /* 6 single-byte 0xC3 patch patterns decoded from 0x10020640 (0x1013b750..0x1013bc48) in NRTH.dll */
     static const char *const kNetcPatchPats[6] = {
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 53 56 57 50 8D 45 ? 64 A3 ? ? ? ? 89 8D ? ? ? ? C7 45",
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B 75 ? 8B 7D",
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 53 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B D9 89 5D ? 8B 7D",
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? E8",
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 53 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B 45 ? C7 45 ? ? ? ? ? 89 45 ? 8B 58",
-        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B D9 C7 45 ? ? ? ? ? 8B 0D"
+        /* #01 (0x10020681, 0x1013baa0) */
+        "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 0F 31 8B F0",
+        /* #03 (0x1002083b, 0x1013b9b8) */
+        "55 8B EC 56 6A ? E8",
+        /* #04 (0x100208af, 0x1013bc48) */
+        "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B 15 ? ? ? ? 8D 85",
+        /* #10 (0x10020ec8, 0x1013b8b8) */
+        "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 89 7D ? 50 B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? 58 E8",
+        /* #13 (0x1002143f, 0x1013bb78) */
+        "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 33 C9 BA ? ? ? ? 33 C0 ? ? ? ? 85 C0",
+        /* #14 (0x10021573, 0x1013b750) */
+        "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 0F 31 8B C8"
     };
-    const uint8_t kRet1[1]  = { 0xC3 };
-    const uint8_t kRet10[3] = { 0xC2, 0x10, 0x00 };
+    const uint8_t kRet1[1] = { 0xC3 };
     for (int i = 0; i < 6; ++i) {
         uint8_t *hit = (uint8_t *)ResolvePattern_10002960(moduleBase, moduleSize, kNetcPatchPats[i]);
         if (hit) {
-            if (i < 5) PatchBytes_Live(hit, kRet1, 1);
-            else       PatchBytes_Live(hit, kRet10, 3);
+            PatchBytes_Live(hit, kRet1, 1);
         }
     }
 
-    /* 7 guard detours + SendPacket detour (0x1001da80) from 0x10020640 */
+    /* 7 guard detours + SendPacket detour (0x1001da80) decoded from 0x10020640 in NRTH.dll */
     struct LiveNetcDetour { const char *pat; void *detour; void **orig; };
     static void *s_dummyOrig[7] = { NULL };
     LiveNetcDetour detours[8] = {
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B F1 E8",
+        /* #02 (0x100206f5, 0x1013b9d0) -> 0x1001dc30 */
+        { "55 8B EC 6A ? 68 ? ? ? ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 31 45 ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 89 65 ? C7 45 ? ? ? ? ? 8B 4D ? ? ? 3C ? 75 ? 8B 41 ? 83 C1 ? 03 C8 8B 15 ? ? ? ? A1",
           (void *)&Hook_Netc_RetFalse_1001dc30, &s_dummyOrig[0] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 53 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B D9 83 7B",
+        /* #05 (0x100209dd, inline 0x10021d30) -> 0x1001dc40 */
+        { "55 8B EC 6A ? 68 ? ? ? ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 31 45 ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 89 65 ? 8B F9 89 7D ? 50 B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? 58 E8",
           (void *)&Hook_Netc_Ret4_1001dc40, &s_dummyOrig[1] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B F1 C7 45 ? ? ? ? ? 8D 4D",
+        /* #06 (0x10020ba8, 0x1013b808) -> 0x1001f500 */
+        { "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B ? 89 6C 24 ? 8B EC 6A FF 68 96 69 3D 10",
           (void *)&Hook_Netc_RetZero_1001f500, &s_dummyOrig[2] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B D9 C7 45 ? ? ? ? ? 83 7B",
+        /* #07 (0x10020c42, 0x1013b860) -> 0x1001f500 */
+        { "53 8B DC 83 EC 08 83 E4 F0 83 C4 04 55 8B 6B ? 89 6C 24 ? 8B EC 6A FF 68 CC 67 3D 10",
           (void *)&Hook_Netc_RetZero_1001f500, &s_dummyOrig[3] },
-        { "55 8B EC 83 EC ? A1 ? ? ? ? 33 C5 89 45 ? 56 8B F1 6A",
+        /* #08 (0x10020cdc, 0x1013bb54) -> 0x1001f500 */
+        { "55 8B EC 6A FF 68 1C BF 3D 10",
           (void *)&Hook_Netc_RetZero_1001f500, &s_dummyOrig[4] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 53 56 57 50 8D 45 ? 64 A3 ? ? ? ? 89 8D ? ? ? ? 8B 45",
+        /* #09 (0x10020d76, 0x1013bd10) -> 0x1001dc50 */
+        { "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 89 8D ? ? ? ? 50 B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? 58 E8 ? ? ? ? B9",
           (void *)&Hook_Netc_RetZero8_1001dc50, &s_dummyOrig[5] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 83 EC ? 53 56 57 A1 ? ? ? ? 33 C5 50 8D 45 ? 64 A3 ? ? ? ? 8B F1 89 75 ? 8B 06",
+        /* #11 (0x10020f4b, inline 0x10021bd0) -> 0x10001d20 */
+        { "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F9 89 BD ? ? ? ? 50 B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? B8 ? ? ? ? 58 80 7B",
           (void *)&Hook_Netc_RetVoid_10001d20, &s_dummyOrig[6] },
-        { "55 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F1 89 75 ? 8B 46 ? 89 45 ? 8B 45 ? 83 EC",
+        /* #12 (0x100211ee, inline 0x10022ac0) -> 0x1001da80 */
+        { "53 8B DC 83 EC ? 83 E4 ? 83 C4 ? 55 8B 6B ? 89 6C 24 ? 8B EC 6A ? 68 ? ? ? ? 64 A1 ? ? ? ? 50 53 81 EC ? ? ? ? A1 ? ? ? ? 33 C5 89 45 ? 56 57 50 8D 45 ? 64 A3 ? ? ? ? 8B F1 89 B5 ? ? ? ? 8B 7B ? 89 BD",
           (void *)&Hook_Netc_SendPacket_1001da80, (void **)&g_pOrigNetcSendPacket },
     };
     for (int i = 0; i < 8; ++i) {
@@ -1976,30 +1987,21 @@ static void TryArmLoadedModules(void)
             ArmNetc_Live_10020640((uint8_t *)hNetc, modSize);
         }
     }
-
-    if (g_lOverlayArmed == 0) {
-        void **vtable = GetD3D9DeviceVTable();
-        if (vtable && InterlockedCompareExchange(&g_lOverlayArmed, 1, 0) == 0) {
-            if (!InstallD3D9Hooks(vtable)) {
-                InterlockedExchange(&g_lOverlayArmed, 0);
-            } else {
-                InstallCursorHooks_100165ee();
-            }
-        }
-    }
 }
 
 static DWORD WINAPI MainInitThread(LPVOID lpParam)
 {
     (void)lpParam;
 
+    /* Matches 0x1000a888..0x1000aca0 in NRTH.dll: ensure C:\NVX, C:\NVX\logs, C:\NVX\dump exist */
+    CreateDirectoryA("C:\\NVX", NULL);
+    CreateDirectoryA("C:\\NVX\\logs", NULL);
+    CreateDirectoryA("C:\\NVX\\dump", NULL);
+
     /* Load C:\NVX\loader_config.cfg or C:\Overwack\loader_config.cfg */
     if (!NrthConfig_Load("C:\\NVX\\loader_config.cfg")) {
         NrthConfig_Load(NULL);
     }
-
-    /* Run C:\NVX, ADS, registry and disk model probes */
-    RunEnvironmentProbes();
 
     if (MH_Initialize() != MH_OK) {
         return 1;
@@ -2028,15 +2030,23 @@ static DWORD WINAPI MainInitThread(LPVOID lpParam)
         }
     }
 
-    /* Immediately arm D3D9 Present/Reset + Cursor hooks + any already-loaded client.dll/netc.dll
-     * (matches 0x1000ace9..0x1000ad80 in NRTH.dll) */
+    /* Check if client.dll / netc.dll are already loaded (matches 0x1000ace9..0x1000ad34 in NRTH.dll) */
     TryArmLoadedModules();
+
+    /* Initialize D3D9 Present/Reset + Cursor hooks (matches 0x1000ad76 -> 0x10016300 in NRTH.dll) */
+    if (g_lOverlayArmed == 0) {
+        void **vtable = GetD3D9DeviceVTable();
+        if (vtable && InterlockedCompareExchange(&g_lOverlayArmed, 1, 0) == 0) {
+            if (!InstallD3D9Hooks(vtable)) {
+                InterlockedExchange(&g_lOverlayArmed, 0);
+            } else {
+                InstallCursorHooks_100165ee();
+            }
+        }
+    }
 
     /* Background watch loop (matches 0x1000a820 in NRTH.dll) */
     while (!(GetAsyncKeyState(VK_END) & 1)) {
-        if (g_lOverlayArmed == 0 || g_lClientArmed == 0 || g_lNetcArmed == 0) {
-            TryArmLoadedModules();
-        }
         Sleep(50);
     }
     return 0;
@@ -2058,8 +2068,26 @@ static NTSTATUS NTAPI Hooked_LdrLoadDll(PWSTR SearchPath, PULONG DllCharacterist
 {
     NTSTATUS status = g_pOrigLdrLoadDll(SearchPath, DllCharacteristics, ModuleFileName, DllHandle);
 
-    if (status >= 0 && DllHandle && *DllHandle) {
-        TryArmLoadedModules();
+    if (status >= 0 && ModuleFileName && ModuleFileName->Buffer && ModuleFileName->Length > 0) {
+        /* Matches 0x1000a640..0x1000a81d in NRTH.dll: check if ModuleFileName contains client.dll or netc.dll */
+        char lowerName[MAX_PATH] = {0};
+        USHORT nChars = ModuleFileName->Length / sizeof(WCHAR);
+        if (nChars >= MAX_PATH) {
+            nChars = MAX_PATH - 1;
+        }
+        for (USHORT i = 0; i < nChars; ++i) {
+            WCHAR wc = ModuleFileName->Buffer[i];
+            char c = (wc < 0x80) ? (char)wc : '?';
+            if (c >= 'A' && c <= 'Z') {
+                c = (char)(c + ('a' - 'A'));
+            }
+            lowerName[i] = c;
+        }
+        lowerName[nChars] = '\0';
+
+        if (strstr(lowerName, "client.dll") != NULL || strstr(lowerName, "netc.dll") != NULL) {
+            TryArmLoadedModules();
+        }
     }
     return status;
 }
@@ -2092,14 +2120,13 @@ static void **GetD3D9DeviceVTable(void)
         return NULL;
     }
 
-    /* Primary method (VA 0x10012980): pattern-scan d3d9.dll .text for C7 06 ? ? ? ? 89 86 ? ? ? ? 89 86 */
+    /* Matches 0x10012980..0x10012bb5 in NRTH.dll:
+     * Pattern-scan d3d9.dll (from base, up to min(SizeOfImage, 0x128000)) for
+     * C7 06 ? ? ? ? 89 86 ? ? ? ? 89 86 without creating a dummy D3D9 device/window. */
     uint32_t d3dSize = GetLoadedModuleSize(hD3D);
-    if (d3dSize > 0x1000u) {
-        uint32_t scanLen = d3dSize - 0x1000u;
-        if (scanLen > 0x128000u) {
-            scanLen = 0x128000u;
-        }
-        void **cand = FindD3D9VTableInBuffer_10012980((const uint8_t *)hD3D + 0x1000u, scanLen);
+    if (d3dSize > 0x0Eu) {
+        uint32_t scanLen = (d3dSize > 0x128000u) ? 0x128000u : d3dSize;
+        void **cand = FindD3D9VTableInBuffer_10012980((const uint8_t *)hD3D, scanLen);
         if (cand &&
             Nrth_IsPointerReadable_VirtualQuery(cand) &&
             Nrth_IsPointerReadable_VirtualQuery(cand[16]) &&
@@ -2108,53 +2135,7 @@ static void **GetD3D9DeviceVTable(void)
             return pCachedVTable;
         }
     }
-
-    /* Fallback: temporary dummy window + Direct3DCreate9 device */
-    PFN_Direct3DCreate9 pCreate = (PFN_Direct3DCreate9)GetProcAddress(hD3D, "Direct3DCreate9");
-    if (!pCreate) {
-        return NULL;
-    }
-
-    WNDCLASSA wc = {0};
-    wc.lpfnWndProc   = DefWindowProcA;
-    wc.hInstance     = GetModuleHandleA(NULL);
-    wc.lpszClassName = "NVXD3DDummyWnd";
-    RegisterClassA(&wc);
-
-    HWND hWnd = CreateWindowExA(0, wc.lpszClassName, "", WS_OVERLAPPED,
-                                0, 0, 32, 32, NULL, NULL, wc.hInstance, NULL);
-    if (!hWnd) {
-        return NULL;
-    }
-
-    IDirect3D9 *pD3D = pCreate(D3D_SDK_VERSION);
-    if (!pD3D) {
-        DestroyWindow(hWnd);
-        return NULL;
-    }
-
-    D3DPRESENT_PARAMETERS pp;
-    ZeroMemory(&pp, sizeof(pp));
-    pp.Windowed      = TRUE;
-    pp.SwapEffect    = D3DSWAPEFFECT_DISCARD;
-    pp.hDeviceWindow = hWnd;
-
-    IDirect3DDevice9 *pDev = NULL;
-    HRESULT hr = pD3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hWnd,
-                                    D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &pDev);
-    if (FAILED(hr) || !pDev) {
-        pD3D->Release();
-        DestroyWindow(hWnd);
-        return NULL;
-    }
-
-    pCachedVTable = *(void ***)pDev;
-
-    pDev->Release();
-    pD3D->Release();
-    DestroyWindow(hWnd);
-    UnregisterClassA(wc.lpszClassName, wc.hInstance);
-    return pCachedVTable;
+    return NULL;
 }
 
 static bool InstallD3D9Hooks(void **vtable)
