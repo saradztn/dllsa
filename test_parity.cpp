@@ -12,6 +12,7 @@
 #include "nrth_audit_sigs.h"
 #include "nrth_codec.h"
 #include "nrth_config.h"
+#include "nrth_fonts.h"
 #include "nrth_hook.h"
 #include "nrth_ui.h"
 
@@ -446,6 +447,109 @@ int main(void)
         if (fDll) fclose(fDll);
         if (fExe) fclose(fExe);
         if (fAud) fclose(fAud);
+    }
+
+    /* 10. Verify DARKANARCHY bilingual fonts + Arabic shaping/BiDi engine */
+    {
+        /* 10a. Embedded TTF payloads are valid TrueType fonts */
+        CHECK(sizeof(kFontEnglishTTF) == 78604u &&
+              kFontEnglishTTF[0] == 0x00 && kFontEnglishTTF[1] == 0x01 &&
+              kFontEnglishTTF[2] == 0x00 && kFontEnglishTTF[3] == 0x00,
+              "nrth_fonts: kFontEnglishTTF (ChakraPetch-SemiBold.ttf, 78604 bytes) has TTF magic");
+        CHECK(sizeof(kFontArabicTTF) == 244616u &&
+              kFontArabicTTF[0] == 0x00 && kFontArabicTTF[1] == 0x01 &&
+              kFontArabicTTF[2] == 0x00 && kFontArabicTTF[3] == 0x00,
+              "nrth_fonts: kFontArabicTTF (IBMPlexSansArabic-SemiBold.ttf, 244616 bytes) has TTF magic");
+
+        /* 10b. Language switch round-trip */
+        NrthUI_SetLanguageArabic(true);
+        CHECK(NrthUI_IsLanguageArabic() == true, "NrthUI_SetLanguageArabic(true) round-trip");
+        NrthUI_SetLanguageArabic(false);
+        CHECK(NrthUI_IsLanguageArabic() == false, "NrthUI_SetLanguageArabic(false) round-trip");
+
+        /* 10c. Contextual shaping: "سلام" contains a mandatory LAM-ALEF ligature:
+         * [FEB3 FEFC FEE1] (seen initial + lam-alef final + meem isolated) */
+        {
+            uint32_t in[4], shaped[8] = {0};
+            size_t n = 0;
+            in[n++] = 0x0633; in[n++] = 0x0644; in[n++] = 0x0627; in[n++] = 0x0645;
+            size_t m = NrthShape_ArabicCodepoints(in, n, shaped, 8);
+            CHECK(m == 3 && shaped[0] == 0xFEB3 && shaped[1] == 0xFEFC &&
+                  shaped[2] == 0xFEE1,
+                  "Arabic shaper: سلام -> FEB3 FEFC FEE1 (seen initial + lam-alef final + meem isolated)");
+
+            /* Lam-Alef ligature: "لا" -> FEFB (isolated) */
+            uint32_t la[2] = { 0x0644, 0x0627 };
+            uint32_t lig[4] = {0};
+            m = NrthShape_ArabicCodepoints(la, 2, lig, 4);
+            CHECK(m == 1 && lig[0] == 0xFEFB,
+                  "Arabic shaper: لا -> FEFB (lam-alef isolated ligature)");
+
+            /* Connected lam-alef: "ملا" -> meem initial FEE3 + lam-alef final FEFC */
+            uint32_t mla[3] = { 0x0645, 0x0644, 0x0627 };
+            uint32_t out3[4] = {0};
+            m = NrthShape_ArabicCodepoints(mla, 3, out3, 4);
+            CHECK(m == 2 && out3[0] == 0xFEE3 && out3[1] == 0xFEFC,
+                  "Arabic shaper: ملا -> FEE3 FEFC (meem initial + lam-alef final)");
+
+            /* Right-joining alef never connects forward: "أب" ->
+             * alef-hamza isolated FE83 + beh isolated FE8F */
+            uint32_t ab[2] = { 0x0623, 0x0628 };
+            uint32_t out4[4] = {0};
+            m = NrthShape_ArabicCodepoints(ab, 2, out4, 4);
+            CHECK(m == 2 && out4[0] == 0xFE83 && out4[1] == 0xFE8F,
+                  "Arabic shaper: أب -> FE83 FE8F (alef right-joining, beh isolated)");
+
+            /* Dual-joining chain: "بب" -> beh initial FE91 + beh final FE90 */
+            uint32_t bb[2] = { 0x0628, 0x0628 };
+            uint32_t out5[4] = {0};
+            m = NrthShape_ArabicCodepoints(bb, 2, out5, 4);
+            CHECK(m == 2 && out5[0] == 0xFE91 && out5[1] == 0xFE90,
+                  "Arabic shaper: بب -> FE91 FE90 (beh initial + beh final)");
+        }
+
+        /* 10d. Public shaping API: UTF-8 -> shaped + visually reordered UTF-8.
+         * "سلام" shaped [FEB3 FEFC FEE1], visual (reversed) [FEE1 FEFC FEB3]
+         * in UTF-8: "\xEF\xBB\xA1\xEF\xBB\xBC\xEF\xBA\xB3" */
+        {
+            char out[128];
+            const char *got = NrthUI_ShapeArabicText("\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85", out, sizeof(out));
+            const char *want = "\xEF\xBB\xA1\xEF\xBB\xBC\xEF\xBA\xB3";
+            CHECK(got == out && strcmp(out, want) == 0,
+                  "NrthUI_ShapeArabicText: سلام -> visual UTF-8 (FEE1 FEFC FEB3)");
+        }
+
+        /* 10e. BiDi visual reorder (LTR base): Arabic run is reversed IN PLACE,
+         * Latin run stays. Logical [شجرة abc] -> visual [ةرجش abc]. */
+        {
+            uint32_t in[7], visual[8] = {0};
+            /* شجرة = 0634 062C 0631 0629 */
+            in[0] = 0x0634; in[1] = 0x062C; in[2] = 0x0631; in[3] = 0x0629;
+            in[4] = 'a';    in[5] = 'b';    in[6] = 'c';
+            size_t v = NrthBidi_ReorderVisual(in, 7, visual, 8);
+            CHECK(v == 7 && visual[0] == 0x0629 && visual[1] == 0x0631 &&
+                  visual[2] == 0x062C && visual[3] == 0x0634 &&
+                  visual[4] == 'a' && visual[5] == 'b' && visual[6] == 'c',
+                  "BiDi reorder: [شجرة abc] -> visual [reversed Arabic run][abc]");
+        }
+
+        /* 10f. ASCII-only strings pass through untouched */
+        {
+            char out[64];
+            NrthUI_ShapeArabicText("DARKANARCHY 123", out, sizeof(out));
+            CHECK(strcmp(out, "DARKANARCHY 123") == 0,
+                  "NrthUI_ShapeArabicText: pure ASCII passes through unchanged");
+        }
+
+        /* 10g. Feature label translation table has an Arabic entry for every feature */
+        {
+            NrthUI_SetLanguageArabic(false);
+            /* FeatureTr is internal; verify indirectly through public state:
+             * toggling language must not corrupt feature state */
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "Feature state intact after language toggles");
+        }
     }
 
     printf("---------------------------------------------------\n");

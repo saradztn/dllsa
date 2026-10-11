@@ -38,6 +38,7 @@
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
+#include "nrth_fonts.h"
 #endif
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -2266,6 +2267,35 @@ static void EnsureOverlayInitialized(IDirect3DDevice9 *pDevice, HWND hDestWindow
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;
     NrthUI_ApplyTheme();
+
+    /* Load embedded DARKANARCHY fonts (nrth_fonts.h):
+     *  - English: ChakraPetch-SemiBold.ttf
+     *  - Arabic : IBMPlexSansArabic-SemiBold.ttf with full Presentation Forms-B */
+    {
+        static const ImWchar kEnRanges[] = { 0x0020, 0x00FF, 0 };
+        static const ImWchar kArRanges[] = {
+            0x0020, 0x00FF,   /* Latin basics + supplements for mixed labels */
+            0x0600, 0x06FF,   /* Arabic */
+            0x0750, 0x077F,   /* Arabic Supplement */
+            0x08A0, 0x08FF,   /* Arabic Extended-A */
+            0xFB50, 0xFDFF,   /* Arabic Presentation Forms-A (ligatures) */
+            0xFE70, 0xFEFF,   /* Arabic Presentation Forms-B */
+            0,
+        };
+        ImFontConfig fcEn;
+        ImFontConfig fcAr;
+        fcEn.FontDataOwnedByAtlas = false;
+        fcAr.FontDataOwnedByAtlas = false;
+        fcEn.OversampleH = 2; fcEn.OversampleV = 1;
+        fcAr.OversampleH = 2; fcAr.OversampleV = 1;
+        ImFont *pFontEn = io.Fonts->AddFontFromMemoryTTF(
+            (void *)kFontEnglishTTF, (int)sizeof(kFontEnglishTTF), 17.0f, &fcEn, kEnRanges);
+        ImFont *pFontAr = io.Fonts->AddFontFromMemoryTTF(
+            (void *)kFontArabicTTF, (int)sizeof(kFontArabicTTF), 17.0f, &fcAr, kArRanges);
+        NrthUI_SetFonts(pFontEn, pFontAr);
+        io.FontDefault = pFontEn ? pFontEn : io.Fonts->Fonts[0];
+    }
+
     if (!ImGui_ImplWin32_Init(g_hGameWnd)) {
         return;
     }

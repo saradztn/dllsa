@@ -1,19 +1,11 @@
 #pragma once
 /**
  * ============================================================================
- * nrth_ui.h — NRTH overlay UI & MTA Packet / Feature Sync interface
+ * nrth_ui.h — DARKANARCHY (by XRAOUF) Overlay UI & MTA Packet / Feature Sync
  * ============================================================================
- * Evidence:
- *   - Window title "North Cheat" (VA 0x100ea0d8)
- *   - Top tabs "%s##nvx_top_%d": Scripts | Dumper | Cheat | Vehicle | Config
- *   - PACKET_ID_* table (.rdata 0x100e9be4..0x100eaaa4, including
- *     PACKET_ID_CHEAT_CHALLENGEMEMORY at 0x100eb6a8)
- *   - Report channels: PLAYER_SCREENSHOT, PLAYER_TRANSGRESSION,
- *     PLAYER_DIAGNOSTIC, PLAYER_ACINFO
- *   - Sync structs: SPlayerHealthSync, SWeaponAimSync
- *   - Lua VM bridge: 0x1013bf04 (stride 0x1C, L at +0x18), default_L 0x1013c95c,
- *     loadbuffer 0x1013c94c ("@custom"), pcall 0x1013c974, flag 0x1013c939,
- *     script buffer 0x1013beec, VirtualQuery pointer guard.
+ * Bilingual UI (Arabic العربية + English) with embedded TrueType fonts:
+ *   - English TTF : ChakraPetch-SemiBold.ttf
+ *   - Arabic TTF  : IBMPlexSansArabic-SemiBold.ttf (with contextual shaper & BiDi)
  * ============================================================================
  */
 #include <stdint.h>
@@ -33,6 +25,17 @@ extern "C" {
 void NrthUI_ApplyTheme(void);
 void NrthUI_Build(void);
 void NrthUI_RenderFrame(bool menuOpen);
+
+/* Bilingual & Arabic contextual shaping API */
+void        NrthUI_SetLanguageArabic(bool isArabic);
+bool        NrthUI_IsLanguageArabic(void);
+const char *NrthUI_ShapeArabicText(const char *utf8In, char *outBuf, size_t outCap);
+void        NrthUI_SetFonts(void *pEnglishFont, void *pArabicFont);
+
+/* Arabic presentation-form shaper & simplified UAX#9 BiDi reorder
+ * (exposed for verification tests; both are pure functions) */
+size_t NrthShape_ArabicCodepoints(const uint32_t *in, size_t n, uint32_t *out, size_t outCap);
+size_t NrthBidi_ReorderVisual(const uint32_t *in, size_t n, uint32_t *out, size_t outCap);
 
 const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount);
 void                 NrthUI_SyncFeaturesToState(void);

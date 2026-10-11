@@ -1,23 +1,16 @@
 /**
  * ============================================================================
- * nrth_ui.cpp — UI, Packet Catalogue, Feature Sync & Lua VM Bridge (R2)
+ * nrth_ui.cpp — DARKANARCHY (by XRAOUF) — Bilingual Overlay UI (AR + EN)
  * ============================================================================
- * Evidence sources (see analysis/strings_catalog.txt + runtime screenshot):
- *   - Window title "North Cheat"                         (VA 0x100ea0d8)
- *   - Top tabs  "%s##nvx_top_%d"  -> Scripts | Dumper | Cheat | Vehicle | Config
- *   - Scripts sub-tabs "%s##nvx_ssub_%d" -> Editor | Scripts | Resources |
- *             Events | Events Table | Packets   (off 0xe94a8-0xe94dc)
- *   - Cheat sub-tabs  "%s##nvx_csub_%d"  -> Player | Other | Markers (off 0xe94ec-0xe950c)
- *   - Editor: "##lua_editor", "Default VM" off 0xe9884, "@custom" off 0xe9890,
- *             "Execute" off 0xe9898, "Script executed" off 0xe98b8
- *   - Lua VM bridge: registry 0x1013bf04 (stride 0x1C, L at +0x18), default_L 0x1013c95c,
- *             loadbuffer 0x1013c94c (L, ..., "@custom"), pcall 0x1013c974,
- *             flag 0x1013c939, script buffer 0x1013beec, VirtualQuery guard.
- *   - Packets: full MTA PACKET_ID_* table (.rdata off 0xe9be4-0xeaaa4, including
- *             PACKET_ID_CHEAT_CHALLENGEMEMORY at VA 0x100eb6a8) and report channels
- *             PLAYER_SCREENSHOT, PLAYER_TRANSGRESSION, PLAYER_DIAGNOSTIC, PLAYER_ACINFO.
- *   - Feature sync: SPlayerHealthSync & SWeaponAimSync (RTTI in .data).
- *   - Config: C:\Overwack\loader_config.cfg (" no_spoofer=%d", " menu_key=%d") + .ovr ("OVRCFG").
+ * Design:
+ *   - Dark anarchist theme: coal black surfaces, blood-red accents, bone text.
+ *   - Embedded fonts (nrth_fonts.h):
+ *       English : ChakraPetch-SemiBold.ttf
+ *       Arabic  : IBMPlexSansArabic-SemiBold.ttf (Presentation Forms-B complete)
+ *   - Arabic text is rendered via presentation forms with a full contextual
+ *     joining shaper (isolated/final/initial/medial + lam-alef ligatures) and
+ *     a simplified UAX#9 BiDi visual reorder (LTR base paragraph).
+ *   - Branding: DARKANARCHY / by XRAOUF with a drawn anarchy-A circle logo.
  * ============================================================================
  */
 #ifdef _WIN32
@@ -35,13 +28,12 @@
 #include "nrth_hook.h"
 #include "nrth_ui.h"
 #if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+#include "nrth_fonts.h"
 #include "nrth_vehicle_names.inc"
 #endif
 
 /* ===========================================================================
  * MTA PACKET_ID_* catalogue (.rdata 0x100e9be4..0x100eaaa4 & 0x100eb6a8)
- * Includes PACKET_ID_CHEAT_CHALLENGEMEMORY (VA 0x100eb6a8) and the 4 report
- * channels PLAYER_SCREENSHOT, PLAYER_TRANSGRESSION, PLAYER_DIAGNOSTIC, PLAYER_ACINFO.
  * =========================================================================== */
 static const NrthPacketDef kMtaPacketCatalog[] = {
     {   0, "PACKET_ID_SERVER_JOIN",                 false },
@@ -134,6 +126,272 @@ extern "C" const NrthPacketDef *NrthUI_GetPacketCatalog(uint32_t *outCount)
 }
 
 /* ===========================================================================
+ * Bilingual core: language state, fonts, UTF-8 helpers
+ * =========================================================================== */
+static bool   g_bArabic = false;
+static void  *g_pFontEn = NULL;
+static void  *g_pFontAr = NULL;
+
+extern "C" void NrthUI_SetLanguageArabic(bool isArabic) { g_bArabic = isArabic; }
+extern "C" bool NrthUI_IsLanguageArabic(void)           { return g_bArabic; }
+extern "C" void NrthUI_SetFonts(void *pEnglishFont, void *pArabicFont)
+{
+    g_pFontEn = pEnglishFont;
+    g_pFontAr = pArabicFont;
+}
+
+static size_t Utf8Decode(const char *s, size_t len, uint32_t *out, size_t outCap)
+{
+    size_t i = 0, w = 0;
+    while (i < len && w < outCap) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80)              { out[w++] = c;                        i += 1; }
+        else if ((c & 0xE0) == 0xC0 && i + 1 < len) {
+            out[w++] = ((uint32_t)(c & 0x1F) << 6)  | ((unsigned char)s[i+1] & 0x3F); i += 2;
+        }
+        else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+            out[w++] = ((uint32_t)(c & 0x0F) << 12) | (((unsigned char)s[i+1] & 0x3F) << 6)
+                     |  ((unsigned char)s[i+2] & 0x3F); i += 3;
+        }
+        else if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+            out[w++] = ((uint32_t)(c & 0x07) << 18) | (((unsigned char)s[i+1] & 0x3F) << 12)
+                     | (((unsigned char)s[i+2] & 0x3F) << 6) | ((unsigned char)s[i+3] & 0x3F); i += 4;
+        }
+        else { out[w++] = c; i += 1; }
+    }
+    return w;
+}
+
+static size_t Utf8Encode(uint32_t cp, char *out, size_t outCap)
+{
+    if (outCap < 4) return 0;
+    if (cp < 0x80)    { out[0] = (char)cp; return 1; }
+    if (cp < 0x800)   { out[0] = (char)(0xC0 | (cp >> 6));  out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000) { out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        out[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
+    out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* ===========================================================================
+ * Arabic contextual shaping engine (U+0600..U+06FF -> Presentation Forms B)
+ * =========================================================================== */
+enum { JT_N = 0, JT_R = 1, JT_D = 2 }; /* Non / Right / Dual joining */
+struct ArShapeEntry { uint32_t base; uint8_t join; uint16_t iso, fin, ini, med; };
+
+static const ArShapeEntry kArShapeTable[] = {
+    { 0x0621, JT_N, 0xFE80, 0xFE80, 0xFE80, 0xFE80 }, /* ء  HAMZA              */
+    { 0x0622, JT_R, 0xFE81, 0xFE82, 0xFE81, 0xFE82 }, /* آ  ALEF MADDA         */
+    { 0x0623, JT_R, 0xFE83, 0xFE84, 0xFE83, 0xFE84 }, /* أ  ALEF HAMZA ABOVE   */
+    { 0x0624, JT_R, 0xFE85, 0xFE86, 0xFE85, 0xFE86 }, /* ؤ  WAW HAMZA          */
+    { 0x0625, JT_R, 0xFE87, 0xFE88, 0xFE87, 0xFE88 }, /* إ  ALEF HAMZA BELOW   */
+    { 0x0626, JT_D, 0xFE89, 0xFE8A, 0xFE8B, 0xFE8C }, /* ئ  YEH HAMZA          */
+    { 0x0627, JT_R, 0xFE8D, 0xFE8E, 0xFE8D, 0xFE8E }, /* ا  ALEF               */
+    { 0x0628, JT_D, 0xFE8F, 0xFE90, 0xFE91, 0xFE92 }, /* ب  BEH                */
+    { 0x0629, JT_R, 0xFE93, 0xFE94, 0xFE93, 0xFE94 }, /* ة  TEH MARBUTA        */
+    { 0x062A, JT_D, 0xFE95, 0xFE96, 0xFE97, 0xFE98 }, /* ت  TEH                */
+    { 0x062B, JT_D, 0xFE99, 0xFE9A, 0xFE9B, 0xFE9C }, /* ث  THEH               */
+    { 0x062C, JT_D, 0xFE9D, 0xFE9E, 0xFE9F, 0xFEA0 }, /* ج  JEEM               */
+    { 0x062D, JT_D, 0xFEA1, 0xFEA2, 0xFEA3, 0xFEA4 }, /* ح  HAH                */
+    { 0x062E, JT_D, 0xFEA5, 0xFEA6, 0xFEA7, 0xFEA8 }, /* خ  KHAH               */
+    { 0x062F, JT_R, 0xFEA9, 0xFEAA, 0xFEA9, 0xFEAA }, /* د  DAL                */
+    { 0x0630, JT_R, 0xFEAB, 0xFEAC, 0xFEAB, 0xFEAC }, /* ذ  THAL               */
+    { 0x0631, JT_R, 0xFEAD, 0xFEAE, 0xFEAD, 0xFEAE }, /* ر  REH                */
+    { 0x0632, JT_R, 0xFEAF, 0xFEB0, 0xFEAF, 0xFEB0 }, /* ز  ZAIN               */
+    { 0x0633, JT_D, 0xFEB1, 0xFEB2, 0xFEB3, 0xFEB4 }, /* س  SEEN               */
+    { 0x0634, JT_D, 0xFEB5, 0xFEB6, 0xFEB7, 0xFEB8 }, /* ش  SHEEN              */
+    { 0x0635, JT_D, 0xFEB9, 0xFEBA, 0xFEBB, 0xFEBC }, /* ص  SAD                */
+    { 0x0636, JT_D, 0xFEBD, 0xFEBE, 0xFEBF, 0xFEC0 }, /* ض  DAD                */
+    { 0x0637, JT_D, 0xFEC1, 0xFEC2, 0xFEC3, 0xFEC4 }, /* ط  TAH                */
+    { 0x0638, JT_D, 0xFEC5, 0xFEC6, 0xFEC7, 0xFEC8 }, /* ظ  ZAH                */
+    { 0x0639, JT_D, 0xFEC9, 0xFECA, 0xFECB, 0xFECC }, /* ع  AIN                */
+    { 0x063A, JT_D, 0xFECD, 0xFECE, 0xFECF, 0xFED0 }, /* غ  GHAIN              */
+    { 0x0640, JT_D, 0x0640, 0x0640, 0x0640, 0x0640 }, /* ـ  TATWEEL            */
+    { 0x0641, JT_D, 0xFED1, 0xFED2, 0xFED3, 0xFED4 }, /* ف  FEH                */
+    { 0x0642, JT_D, 0xFED5, 0xFED6, 0xFED7, 0xFED8 }, /* ق  QAF                */
+    { 0x0643, JT_D, 0xFED9, 0xFEDA, 0xFEDB, 0xFEDC }, /* ك  KAF                */
+    { 0x0644, JT_D, 0xFEDD, 0xFEDE, 0xFEDF, 0xFEE0 }, /* ل  LAM                */
+    { 0x0645, JT_D, 0xFEE1, 0xFEE2, 0xFEE3, 0xFEE4 }, /* م  MEEM               */
+    { 0x0646, JT_D, 0xFEE5, 0xFEE6, 0xFEE7, 0xFEE8 }, /* ن  NOON               */
+    { 0x0647, JT_D, 0xFEE9, 0xFEEA, 0xFEEB, 0xFEEC }, /* ه  HEH                */
+    { 0x0648, JT_R, 0xFEED, 0xFEEE, 0xFEED, 0xFEEE }, /* و  WAW                */
+    { 0x0649, JT_R, 0xFEEF, 0xFEF0, 0xFEEF, 0xFEF0 }, /* ى  ALEF MAKSURA       */
+    { 0x064A, JT_D, 0xFEF1, 0xFEF2, 0xFEF3, 0xFEF4 }, /* ي  YEH                */
+};
+
+static const ArShapeEntry *ArShapeLookup(uint32_t cp)
+{
+    for (size_t i = 0; i < sizeof(kArShapeTable) / sizeof(kArShapeTable[0]); ++i) {
+        if (kArShapeTable[i].base == cp) return &kArShapeTable[i];
+    }
+    return NULL;
+}
+
+/* Harakat / marks / invisible controls: transparent for the joining rules */
+static bool ArIsTransparent(uint32_t cp)
+{
+    return (cp >= 0x064B && cp <= 0x065F) || cp == 0x0670 ||
+           (cp >= 0x06D6 && cp <= 0x06ED) ||
+           cp == 0x200B || cp == 0x200E || cp == 0x200F || cp == 0x200D;
+}
+
+/**
+ * Core shaper: logical codepoint stream -> presentation forms (logical order).
+ * Handles isolated/final/initial/medial selection and the mandatory
+ * LAM+ALEF ligatures (U+FEF5..U+FEFC).
+ */
+size_t NrthShape_ArabicCodepoints(const uint32_t *in, size_t n, uint32_t *out, size_t outCap)
+{
+    if (!in || !out || outCap == 0) return 0;
+    size_t w = 0;
+    bool prevLinks = false; /* previous emitted joinable char connects forward */
+    for (size_t i = 0; i < n; ++i) {
+        if (w >= outCap) break;
+        uint32_t cp = in[i];
+        if (ArIsTransparent(cp)) { out[w++] = cp; continue; }
+
+        const ArShapeEntry *e = ArShapeLookup(cp);
+        if (!e) { out[w++] = cp; prevLinks = false; continue; }
+
+        /* next non-transparent char */
+        size_t j = i + 1;
+        while (j < n && ArIsTransparent(in[j])) ++j;
+        uint32_t nextCp = (j < n) ? in[j] : 0;
+        const ArShapeEntry *ne = nextCp ? ArShapeLookup(nextCp) : NULL;
+        /* A following letter connects backward when it is D or R (not N) */
+        bool nextJoinsBack = (ne && ne->join != JT_N);
+
+        /* Mandatory LAM + ALEF ligature */
+        if (cp == 0x0644 &&
+            (nextCp == 0x0622 || nextCp == 0x0623 || nextCp == 0x0625 || nextCp == 0x0627)) {
+            uint32_t lig;
+            switch (nextCp) {
+                case 0x0622: lig = prevLinks ? 0xFEF6u : 0xFEF5u; break;
+                case 0x0623: lig = prevLinks ? 0xFEF8u : 0xFEF7u; break;
+                case 0x0625: lig = prevLinks ? 0xFEFAu : 0xFEF9u; break;
+                default:     lig = prevLinks ? 0xFEFCu : 0xFEFBu; break;
+            }
+            out[w++] = lig;
+            for (size_t t = i + 1; t < j && w < outCap; ++t) out[w++] = in[t]; /* keep harakat */
+            prevLinks = false; /* ligature (alef tail) does not join forward */
+            i = j;
+            continue;
+        }
+
+        bool canForward = (e->join == JT_D) && nextJoinsBack;
+        uint32_t form;
+        if (prevLinks && canForward) form = e->med;
+        else if (prevLinks)          form = e->fin;
+        else if (canForward)         form = e->ini;
+        else                         form = e->iso;
+        out[w++] = form;
+        prevLinks = canForward;
+    }
+    return w;
+}
+
+/* ===========================================================================
+ * Simplified UAX#9 BiDi visual reorder (LTR base paragraph)
+ *   RTL strong chars -> level 1, numbers inside RTL -> level 2,
+ *   neutrals adjacent to RTL -> level 1, strong LTR -> level 0.
+ *   L2: reverse contiguous runs of level >= k for k = maxLevel..1.
+ * =========================================================================== */
+static bool CpIsRtlStrong(uint32_t cp)
+{
+    return (cp >= 0x0590 && cp <= 0x08FF) ||
+           (cp >= 0xFB1D && cp <= 0xFDFF) ||
+           (cp >= 0xFE70 && cp <= 0xFEFF);
+}
+static bool CpIsNumber(uint32_t cp)
+{
+    return (cp >= 0x0030 && cp <= 0x0039) || (cp >= 0x0660 && cp <= 0x0669);
+}
+static bool CpIsLtrStrong(uint32_t cp)
+{
+    return (cp >= 0x0041 && cp <= 0x005A) || (cp >= 0x0061 && cp <= 0x007A) ||
+           (cp >= 0x00C0 && cp <= 0x024F);
+}
+
+size_t NrthBidi_ReorderVisual(const uint32_t *in, size_t n, uint32_t *out, size_t outCap)
+{
+    if (!in || !out || outCap == 0) return 0;
+    if (n > outCap) n = outCap;
+    if (n == 0) return 0;
+
+    static uint8_t lv[4096];
+    if (n > sizeof(lv)) n = sizeof(lv);
+
+    for (size_t i = 0; i < n; ++i) {
+        if (CpIsRtlStrong(in[i]))      lv[i] = 1;
+        else if (CpIsNumber(in[i]))    lv[i] = 2;
+        else if (CpIsLtrStrong(in[i])) lv[i] = 0;
+        else {
+            /* neutral: follow neighbouring RTL strength */
+            bool prevR = (i > 0)     && CpIsRtlStrong(in[i - 1]);
+            bool nextR = (i + 1 < n) && CpIsRtlStrong(in[i + 1]);
+            lv[i] = (prevR || nextR) ? 1 : 0;
+        }
+    }
+
+    for (size_t i = 0; i < n; ++i) out[i] = in[i];
+    for (int level = 2; level >= 1; --level) {
+        size_t i = 0;
+        while (i < n) {
+            if (lv[i] >= level) {
+                size_t j = i;
+                while (j < n && lv[j] >= level) ++j;
+                for (size_t a = i, b = j - 1; a < b; ++a, --b) {
+                    uint32_t t = out[a]; out[a] = out[b]; out[b] = t;
+                }
+                i = j;
+            } else {
+                ++i;
+            }
+        }
+    }
+    return n;
+}
+
+extern "C" const char *NrthUI_ShapeArabicText(const char *utf8In, char *outBuf, size_t outCap)
+{
+    if (!outBuf || outCap == 0) return "";
+    outBuf[0] = '\0';
+    if (!utf8In || !utf8In[0]) return outBuf;
+
+    uint32_t cps[1024];
+    size_t n = Utf8Decode(utf8In, strlen(utf8In), cps, 1024);
+    uint32_t shaped[1024];
+    size_t m = NrthShape_ArabicCodepoints(cps, n, shaped, 1024);
+    uint32_t visual[1024];
+    size_t v = NrthBidi_ReorderVisual(shaped, m, visual, 1024);
+
+    size_t used = 0;
+    for (size_t i = 0; i < v; ++i) {
+        if (used + 4 >= outCap) break;
+        used += Utf8Encode(visual[i], outBuf + used, outCap - used);
+    }
+    if (used >= outCap) used = outCap - 1;
+    outBuf[used] = '\0';
+    outBuf[outCap - 1] = '\0';
+    return outBuf;
+}
+
+/* Rotation buffers for translated UI labels */
+static const char *TrGet(const char *en, const char *ar)
+{
+    static char s_trBufs[24][768];
+    static int  s_trIdx = 0;
+    char *buf = s_trBufs[s_trIdx];
+    s_trIdx = (s_trIdx + 1) % 24;
+    if (!g_bArabic || !ar || !ar[0]) {
+        return en ? en : "";
+    }
+    return NrthUI_ShapeArabicText(ar, buf, 768);
+}
+#define L(en, ar) TrGet((en), (ar))
+
+/* ===========================================================================
  * Feature state & sliders (shared between UI and SPlayerHealthSync/SWeaponAimSync)
  * =========================================================================== */
 struct Feature { const char *label; const char *settings; bool on; int key; int mode; };
@@ -165,6 +423,48 @@ static Feature s_vehicleFeatures[] = {
     {"Repair Car",      "Repair Car Settings",      false, 0, 1},
     {"Unlock Car",      "Unlock Car Settings",      false, 0, 1},
 };
+
+/* Feature label translation map (keys remain English for the settings logic) */
+static const char *FeatureTr(const char *key)
+{
+    static char s_ftBuf[2][256];
+    static int  s_ftIdx = 0;
+    struct Pair { const char *en; const char *ar; };
+    static const Pair kMap[] = {
+        {"GodMode",         "حماية من الموت"},
+        {"Give HP",         "إعطاء دم"},
+        {"Give Armor",      "إعطاء درع"},
+        {"Infinite Ammo",   "ذخيرة لا نهائية"},
+        {"Anti-Spread",     "منع تشتت الرصاص"},
+        {"Anti-ScreenShot", "منع التصوير"},
+        {"Crasher",         "كراشر"},
+        {"Anti-AFK",        "منع الطرد للخمول"},
+        {"AirBreak",        "تحطيم الجاذبية"},
+        {"Click Warp",      "تنقل بالنقرة"},
+        {"High Jump",       "قفز عالي"},
+        {"Money Exploit",   "استغلال الفلوس"},
+        {"Jetpack",         "جت باك"},
+        {"All Weapons",     "كل الأسلحة"},
+        {"Vehicle GodMode", "حماية المركبة"},
+        {"Vehicle Chaos",   "فوضى المركبات"},
+        {"Drive Water",     "القيادة على الماء"},
+        {"Fast Stop",       "توقف سريع"},
+        {"Fall Bike",       "منع السقوط من الدباب"},
+        {"Flying Car",      "سيارة طائرة"},
+        {"Start Engine",    "تشغيل المحرك"},
+        {"Repair Car",      "إصلاح السيارة"},
+        {"Unlock Car",      "فتح السيارة"},
+    };
+    for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); ++i) {
+        if (strcmp(key, kMap[i].en) == 0) {
+            if (!g_bArabic) return kMap[i].en;
+            char *buf = s_ftBuf[s_ftIdx];
+            s_ftIdx = (s_ftIdx + 1) % 2;
+            return NrthUI_ShapeArabicText(kMap[i].ar, buf, 256);
+        }
+    }
+    return key;
+}
 
 static float s_hpValue = 100.f, s_armorValue = 100.f, s_abSpeed = 1.f, s_abIncr = 0.5f;
 static float s_maxDist = 300.f, s_crossSize = 12.f;
@@ -255,7 +555,6 @@ extern "C" void NrthUI_OnClientScriptLoaded(const char *chunkName, const char *c
     if (!chunkName || !chunkName[0] || !code || len == 0) {
         return;
     }
-    /* Skip chunk names starting with '&', "--", or containing "custom" (0x100042a3..0x10004318) */
     if (chunkName[0] == '&' ||
         (chunkName[0] == '-' && chunkName[1] == '-') ||
         strstr(chunkName, "custom") != nullptr) {
@@ -263,7 +562,6 @@ extern "C" void NrthUI_OnClientScriptLoaded(const char *chunkName, const char *c
     }
     s_status = "Server connected.";
 
-    /* Extract resource prefix from "@:resName/..." or "resName\..." */
     const char *p = chunkName;
     while (*p == '@' || *p == ':' || *p == '\\' || *p == '/') ++p;
     const char *sep = p;
@@ -301,14 +599,14 @@ extern "C" bool NrthUI_ShouldBlockServerEvent(const char *eventName)
         s_recentTriggers.push_back(eventName);
     }
     if (s_blockAllEvents) {
-        char msg[160];
+        char msg[192];
         snprintf(msg, sizeof(msg), "Trigger blocked: %s", eventName);
         NrthUI_PushToastNotification(msg);
         return true;
     }
     for (const auto &blk : s_blockedEvents) {
         if (blk == eventName) {
-            char msg[160];
+            char msg[192];
             snprintf(msg, sizeof(msg), "Trigger blocked: %s", eventName);
             NrthUI_PushToastNotification(msg);
             return true;
@@ -508,7 +806,7 @@ static int  s_scriptsSub = 0;
 static int  s_cheatSub   = 0;
 static bool s_menuOpen   = true;
 
-static char s_editorBuf[65536] = "-- North Cheat editor\n";
+static char s_editorBuf[65536] = "-- DARKANARCHY lua editor\n";
 static int  s_vmIndex     = 0;  /* "Default VM", "@custom" */
 
 static std::string s_lastAction;
@@ -541,48 +839,102 @@ static int  s_bindCapture = -1;
 
 static int s_vehicleSel = 0;
 
-static const ImVec4 kAccent      = ImVec4(0.48f, 0.22f, 0.85f, 1.00f);
-static const ImVec4 kAccentHover = ImVec4(0.56f, 0.30f, 0.92f, 1.00f);
-static const ImVec4 kTabIdle     = ImVec4(0.16f, 0.10f, 0.24f, 1.00f);
-static const ImVec4 kPanelBg     = ImVec4(0.09f, 0.06f, 0.14f, 1.00f);
-static const ImVec4 kWindowBg    = ImVec4(0.07f, 0.04f, 0.11f, 1.00f);
+/* ---------------------------------------------------------------------------
+ * DARKANARCHY theme: coal black + blood red + bone white
+ * ------------------------------------------------------------------------- */
+static const ImVec4 kBlood      = ImVec4(0.73f, 0.05f, 0.05f, 1.00f);
+static const ImVec4 kBloodHi    = ImVec4(0.92f, 0.10f, 0.10f, 1.00f);
+static const ImVec4 kBloodDim   = ImVec4(0.42f, 0.05f, 0.05f, 1.00f);
+static const ImVec4 kCoal       = ImVec4(0.055f, 0.055f, 0.070f, 0.97f);
+static const ImVec4 kAsh        = ImVec4(0.095f, 0.095f, 0.120f, 0.98f);
+static const ImVec4 kAshDeep    = ImVec4(0.13f, 0.13f, 0.16f, 1.00f);
+static const ImVec4 kBone       = ImVec4(0.93f, 0.92f, 0.90f, 1.00f);
+static const ImVec4 kSteel      = ImVec4(0.34f, 0.30f, 0.30f, 0.65f);
+static const ImVec4 kSmoke      = ImVec4(0.62f, 0.60f, 0.60f, 1.00f);
 
 void NrthUI_ApplyTheme()
 {
     ImGuiStyle &st = ImGui::GetStyle();
-    st.WindowRounding = 8.f;
-    st.ChildRounding  = 6.f;
-    st.FrameRounding  = 4.f;
-    st.GrabRounding   = 4.f;
+    st.WindowRounding   = 10.f;
+    st.ChildRounding    = 8.f;
+    st.FrameRounding    = 5.f;
+    st.GrabRounding     = 5.f;
+    st.PopupRounding    = 6.f;
+    st.ScrollbarRounding= 8.f;
+    st.TabRounding      = 6.f;
     st.WindowBorderSize = 1.f;
+    st.ChildBorderSize  = 1.f;
     st.FrameBorderSize  = 0.f;
-    st.WindowPadding = ImVec2(12, 12);
-    st.ItemSpacing   = ImVec2(8, 6);
+    st.FramePadding     = ImVec2(9, 5);
+    st.ItemSpacing      = ImVec2(8, 7);
+    st.WindowPadding    = ImVec2(14, 12);
+    st.ScrollbarSize    = 13.f;
+    st.GrabMinSize      = 10.f;
 
     ImVec4 *c = st.Colors;
-    c[ImGuiCol_WindowBg]        = kWindowBg;
-    c[ImGuiCol_ChildBg]         = kPanelBg;
-    c[ImGuiCol_PopupBg]         = ImVec4(0.11f, 0.07f, 0.17f, 1.f);
-    c[ImGuiCol_Border]          = ImVec4(0.35f, 0.22f, 0.55f, 0.6f);
-    c[ImGuiCol_FrameBg]         = ImVec4(0.14f, 0.09f, 0.22f, 1.f);
-    c[ImGuiCol_FrameBgHovered]  = kAccentHover;
-    c[ImGuiCol_FrameBgActive]   = kAccent;
-    c[ImGuiCol_Button]          = kTabIdle;
-    c[ImGuiCol_ButtonHovered]   = kAccentHover;
-    c[ImGuiCol_ButtonActive]    = kAccent;
-    c[ImGuiCol_Header]          = kTabIdle;
-    c[ImGuiCol_HeaderHovered]   = kAccentHover;
-    c[ImGuiCol_HeaderActive]    = kAccent;
-    c[ImGuiCol_Tab]             = kTabIdle;
-    c[ImGuiCol_TabHovered]      = kAccentHover;
-    c[ImGuiCol_TabActive]       = kAccent;
-    c[ImGuiCol_TitleBg]         = kWindowBg;
-    c[ImGuiCol_TitleBgActive]   = kWindowBg;
-    c[ImGuiCol_Separator]       = ImVec4(0.35f, 0.22f, 0.55f, 0.6f);
-    c[ImGuiCol_CheckMark]       = kAccent;
-    c[ImGuiCol_SliderGrab]      = kAccent;
-    c[ImGuiCol_SliderGrabActive]= kAccentHover;
-    c[ImGuiCol_Text]            = ImVec4(0.93f, 0.91f, 0.98f, 1.f);
+    c[ImGuiCol_WindowBg]         = kCoal;
+    c[ImGuiCol_ChildBg]          = kAsh;
+    c[ImGuiCol_PopupBg]          = kAshDeep;
+    c[ImGuiCol_Border]           = kSteel;
+    c[ImGuiCol_FrameBg]          = ImVec4(0.14f, 0.14f, 0.17f, 1.f);
+    c[ImGuiCol_FrameBgHovered]   = kBloodDim;
+    c[ImGuiCol_FrameBgActive]    = kBlood;
+    c[ImGuiCol_Button]           = ImVec4(0.16f, 0.15f, 0.17f, 1.f);
+    c[ImGuiCol_ButtonHovered]    = kBloodDim;
+    c[ImGuiCol_ButtonActive]     = kBlood;
+    c[ImGuiCol_Header]           = kBloodDim;
+    c[ImGuiCol_HeaderHovered]    = kBlood;
+    c[ImGuiCol_HeaderActive]     = kBloodHi;
+    c[ImGuiCol_Tab]              = ImVec4(0.16f, 0.15f, 0.17f, 1.f);
+    c[ImGuiCol_TabHovered]       = kBlood;
+    c[ImGuiCol_TabActive]        = kBloodDim;
+    c[ImGuiCol_TitleBg]          = kCoal;
+    c[ImGuiCol_TitleBgActive]    = kCoal;
+    c[ImGuiCol_TitleBgCollapsed] = kCoal;
+    c[ImGuiCol_Separator]        = kSteel;
+    c[ImGuiCol_CheckMark]        = kBloodHi;
+    c[ImGuiCol_SliderGrab]       = kBlood;
+    c[ImGuiCol_SliderGrabActive] = kBloodHi;
+    c[ImGuiCol_ScrollbarBg]      = kCoal;
+    c[ImGuiCol_ScrollbarGrab]        = ImVec4(0.25f, 0.22f, 0.22f, 1.f);
+    c[ImGuiCol_ScrollbarGrabHovered] = kBloodDim;
+    c[ImGuiCol_ScrollbarGrabActive]  = kBlood;
+    c[ImGuiCol_Text]             = kBone;
+    c[ImGuiCol_TextDisabled]     = kSmoke;
+    c[ImGuiCol_TextSelectedBg]   = ImVec4(0.55f, 0.08f, 0.08f, 0.60f);
+    c[ImGuiCol_ResizeGrip]       = kSteel;
+    c[ImGuiCol_ResizeGripHovered]= kBloodDim;
+    c[ImGuiCol_ResizeGripActive] = kBlood;
+    c[ImGuiCol_NavCursor]        = kBlood;
+}
+
+/* ---------------------------------------------------------------------------
+ * Anarchy-A circle logo drawn with the ImGui foreground draw list
+ * ------------------------------------------------------------------------- */
+static void DrawAnarchyLogo(ImDrawList *dl, const ImVec2 &center, float radius, float thickness)
+{
+    if (!dl) return;
+    const ImU32 colGlow  = IM_COL32(190, 20, 20, 60);
+    const ImU32 colRed   = IM_COL32(210, 30, 30, 255);
+    const ImU32 colRedHi = IM_COL32(255, 70, 60, 255);
+
+    /* glow rings */
+    dl->AddCircle(center, radius + 4.0f, colGlow, 0, thickness + 3.0f);
+    dl->AddCircle(center, radius, colRed, 0, thickness);
+
+    /* A shape: apex at top of circle, legs to the lower-left/right chord points */
+    const ImVec2 apex(center.x, center.y - radius);
+    const double ang = 3.9269908; /* 225 deg (lower-left) & 315 deg (lower-right) */
+    const ImVec2 legL(center.x + radius * 0.74f * (float)-cos(0.7853982), center.y + radius * 0.74f * (float)sin(0.7853982));
+    const ImVec2 legR(center.x + radius * 0.74f * (float) cos(0.7853982), center.y + radius * 0.74f * (float) sin(0.7853982));
+    (void)ang;
+    dl->AddLine(apex, legL, colRed, thickness);
+    dl->AddLine(apex, legR, colRed, thickness);
+
+    /* crossbar extending slightly past the legs (classic anarchy A) */
+    const float barY = center.y + radius * 0.30f;
+    const float barHalf = radius * 0.62f;
+    dl->AddLine(ImVec2(center.x - barHalf, barY), ImVec2(center.x + barHalf, barY), colRedHi, thickness);
 }
 
 struct ToastNotification {
@@ -650,15 +1002,15 @@ static void ScanConfigs()
 static bool TabButton(const char *label, const char *hiddenId, bool active, const ImVec2 &size)
 {
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHover);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentHover);
+        ImGui::PushStyleColor(ImGuiCol_Button, kBlood);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBloodHi);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBloodHi);
     } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, kTabIdle);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHover);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccent);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.15f, 0.17f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBloodDim);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBlood);
     }
-    char buf[128];
+    char buf[256];
     snprintf(buf, sizeof(buf), "%s##%s", label, hiddenId);
     bool clicked = ImGui::Button(buf, size);
     ImGui::PopStyleColor(3);
@@ -667,10 +1019,14 @@ static bool TabButton(const char *label, const char *hiddenId, bool active, cons
 
 static void StatusLine()
 {
-    ImGui::TextColored(kAccentHover, "%s", s_status.c_str());
-    if (!s_lastAction.empty()) {
+    ImGui::TextColored(g_bArabic ? kBloodHi : kBloodHi, "%s",
+        g_bArabic ? TrGet("", "متصل بالسيرفر") : s_status.c_str());
+    if (!g_bArabic && !s_lastAction.empty()) {
         ImGui::SameLine();
         ImGui::TextDisabled("| %s", s_lastAction.c_str());
+    } else if (g_bArabic && !s_lastAction.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", TrGet("", s_lastAction.c_str()));
     }
 }
 
@@ -694,17 +1050,17 @@ static void DrawEditor()
     const char *customLabel = NrthDecryptOnce(kCt_CustomChunk, sizeof(kCt_CustomChunk),
                                               0x2D, s_customChunk, &s_customGate);
 
-    if (ImGui::Button("Execute", ImVec2(110, 34))) {
+    if (ImGui::Button(L("Execute", "تنفيذ"), ImVec2(110, 34))) {
         s_console.clear();
         if (RunLuaBuffer(s_editorBuf, strlen(s_editorBuf), customLabel, s_vmIndex)) {
-            FeatureAction("Script executed");
+            FeatureAction(g_bArabic ? "تم تنفيذ السكربت" : "Script executed");
         } else {
-            FeatureAction("Script error (see console)");
+            FeatureAction(g_bArabic ? "خطأ في السكربت (شاهد الكونسول)" : "Script error (see console)");
         }
     }
     ImGui::SameLine();
     NrthLuaVmBridge *bridge = Nrth_GetLuaVmBridge();
-    std::string vmPreview = "Default VM";
+    std::string vmPreview = g_bArabic ? "الافتراضية VM" : "Default VM";
     if (s_vmIndex > 0 && bridge && (uint32_t)(s_vmIndex - 1) < bridge->slotCount &&
         (uint32_t)(s_vmIndex - 1) < NRTH_VM_REGISTRY_CAP) {
         const char *nm = (const char *)bridge->registry_1013bf04[s_vmIndex - 1].resourceMeta;
@@ -715,13 +1071,13 @@ static void DrawEditor()
     }
     ImGui::SetNextItemWidth(200);
     if (ImGui::BeginCombo("##vm_combo", vmPreview.c_str())) {
-        if (ImGui::Selectable("Default VM", s_vmIndex == 0)) {
+        if (ImGui::Selectable(L("Default VM", "الافتراضية VM"), s_vmIndex == 0)) {
             s_vmIndex = 0;
         }
         if (bridge) {
             for (uint32_t i = 0; i < bridge->slotCount && i < NRTH_VM_REGISTRY_CAP; ++i) {
                 const char *nm = (const char *)bridge->registry_1013bf04[i].resourceMeta;
-                char lbl[64];
+                char lbl[80];
                 snprintf(lbl, sizeof(lbl), "%s (0x%08X)##vm_%u", nm[0] ? nm : customLabel,
                          bridge->registry_1013bf04[i].luaStatePtr32, i);
                 if (ImGui::Selectable(lbl, s_vmIndex == (int)(i + 1))) {
@@ -732,13 +1088,14 @@ static void DrawEditor()
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Clear##console")) s_console.clear();
+    if (ImGui::Button(L("Clear", "تفريغ##console"))) s_console.clear();
     ImGui::SameLine();
-    ImGui::TextDisabled("Output:");
+    ImGui::TextDisabled("%s", L("Output:", "النتيجة:"));
 
     ImGui::BeginChild("##lua_console", ImVec2(-1, -1), true);
     if (s_console.empty()) {
-        ImGui::TextDisabled("print(...) output appears here");
+        ImGui::TextDisabled("%s", L("print(...) output appears here",
+                                   "نتيجة print(...) تظهر هنا"));
     } else {
         ImGui::TextUnformatted(s_console.c_str());
     }
@@ -748,39 +1105,42 @@ static void DrawEditor()
 static void DrawScriptsList()
 {
     if (!s_scriptsScanned) ScanLuaScripts();
-    ImGui::TextDisabled("Path: .\\lua\\   (evidence: \"%%s\\\\lua\\\\%%s\")");
+    ImGui::TextDisabled("%s", L("Path: .\\lua\\", "المسار: .\\lua\\"));
     ImGui::BeginChild("##scripts_list", ImVec2(-1, -80), true);
     if (s_scripts.empty()) {
-        ImGui::TextDisabled("No scripts found");
+        ImGui::TextDisabled("%s", L("No scripts found", "لا يوجد سكربتات"));
     }
     for (int i = 0; i < (int)s_scripts.size(); ++i) {
         ImGui::PushID(i);
         if (ImGui::Selectable(s_scripts[i].name.c_str(), s_scriptSel == i)) s_scriptSel = i;
         ImGui::SameLine(220);
-        char lbl[64];
-        snprintf(lbl, sizeof(lbl), "Inject##%d", i);
-        if (ImGui::SmallButton(lbl)) FeatureAction(("Injected: " + s_scripts[i].name).c_str());
+        char lbl[96];
+        snprintf(lbl, sizeof(lbl), "%s##%d", L("Inject", "حقن"), i);
+        if (ImGui::SmallButton(lbl)) FeatureAction(g_bArabic ? "تم الحقن" : "Injected");
         ImGui::SameLine();
-        snprintf(lbl, sizeof(lbl), "Auto-inj##%d", i);
+        snprintf(lbl, sizeof(lbl), "%s##%d", L("Auto-inj", "حقن تلقائي"), i);
         ImGui::Checkbox(lbl, &s_scripts[i].autoInject);
         ImGui::PopID();
     }
     ImGui::EndChild();
-    if (ImGui::Button("Dump")) {
+    if (ImGui::Button(L("Dump", "تفريغ"))) {
         if (s_scriptSel >= 0) {
             char msg[256];
-            snprintf(msg, sizeof(msg), "Dump script saved: %s", s_scripts[s_scriptSel].name.c_str());
+            snprintf(msg, sizeof(msg), "%s: %s",
+                     L("Dump script saved", "تم حفظ السكربت"),
+                     s_scripts[s_scriptSel].name.c_str());
             FeatureAction(msg);
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Dump all")) {
+    if (ImGui::Button(L("Dump all", "تفريغ الكل"))) {
         char msg[128];
-        snprintf(msg, sizeof(msg), "Dump all scripts saved (%d)", (int)s_scripts.size());
+        snprintf(msg, sizeof(msg), "%s (%d)",
+                 L("Dump all scripts saved", "تم حفظ كل السكربتات"), (int)s_scripts.size());
         FeatureAction(msg);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Run##script") && s_scriptSel >= 0) {
+    if (ImGui::Button(L("Run", "تشغيل##script")) && s_scriptSel >= 0) {
         std::string path = "lua\\" + s_scripts[s_scriptSel].name;
         FILE *fp = fopen(path.c_str(), "rb");
         if (fp) {
@@ -791,13 +1151,11 @@ static void DrawScriptsList()
             fclose(fp);
             s_console.clear();
             if (RunLuaBuffer(code.c_str(), code.size(), s_scripts[s_scriptSel].name.c_str(), s_vmIndex))
-                FeatureAction("Script executed");
+                FeatureAction(L("Script executed", "تم تنفيذ السكربت"));
             else
-                FeatureAction("Script error (see console)");
+                FeatureAction(L("Script error (see console)", "خطأ في السكربت (شاهد الكونسول)"));
         }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("view: ##script_editor_view | \"File big, no view script\"");
 }
 
 static void DrawResources()
@@ -821,12 +1179,13 @@ static void DrawResources()
             FindClose(h);
         }
     }
-    ImGui::TextDisabled("Source: live CResourceManager (0x100052b0) + disk cache");
+    ImGui::TextDisabled("%s", L("Source: live CResourceManager (0x100052b0) + disk cache",
+                                "المصدر: CResourceManager الحي + الكاش"));
     static char search[64] = "";
-    ImGui::InputTextWithHint("##res_search", "Search...", search, sizeof(search));
+    ImGui::InputTextWithHint("##res_search", L("Search...", "بحث..."), search, sizeof(search));
     static int resSel = 0;
     if (resSel >= (int)s_resources.size()) resSel = 0;
-    std::string preview = s_resources.empty() ? "Select Resource" : s_resources[resSel];
+    std::string preview = s_resources.empty() ? L("Select Resource", "اختر مود") : s_resources[resSel];
     ImGui::SetNextItemWidth(260);
     if (ImGui::BeginCombo("##res_combo", preview.c_str())) {
         for (int i = 0; i < (int)s_resources.size(); ++i) {
@@ -836,20 +1195,21 @@ static void DrawResources()
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(%d found)", (int)s_resources.size());
-    if (ImGui::Button("Stop Resource")) {
+    ImGui::TextDisabled("(%d %s)", (int)s_resources.size(), L("found", "موجود"));
+    if (ImGui::Button(L("Stop Resource", "إيقاف المود"))) {
         if (!s_resources.empty() && resSel >= 0 && resSel < (int)s_resources.size()) {
             std::string stoppedName = s_resources[resSel];
             Nrth_StopClientResource_100054a0(stoppedName.c_str());
             s_resources.erase(s_resources.begin() + resSel);
             if (resSel >= (int)s_resources.size() && resSel > 0) --resSel;
-            char msg[128];
-            snprintf(msg, sizeof(msg), "Resource stopped: %s", stoppedName.c_str());
+            char msg[192];
+            snprintf(msg, sizeof(msg), "%s: %s",
+                     L("Resource stopped", "تم إيقاف المود"), stoppedName.c_str());
             FeatureAction(msg);
         }
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Block list (\" (blocked)\"):");
+    ImGui::TextDisabled("%s", L("Block list:", "قائمة الحظر:"));
     for (auto &e : s_blockedEvents) ImGui::BulletText("%s (blocked)", e.c_str());
 }
 
@@ -863,35 +1223,47 @@ static void DrawEvents()
     for (int i = 0; i < 6; ++i) if (ImGui::Selectable(kEvents[i], evSel == i)) evSel = i;
     ImGui::EndCombo();
     ImGui::SameLine();
-    if (ImGui::Button("Block##event")) {
+    if (ImGui::Button(L("Block", "حظر##event"))) {
         s_blockedEvents.push_back(kEvents[evSel]);
-        FeatureAction(("Event blocked: " + std::string(kEvents[evSel])).c_str());
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Event blocked", "تم حظر الحدث"), kEvents[evSel]);
+        FeatureAction(msg);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Unblock##event") && !s_blockedEvents.empty()) {
-        FeatureAction(("Event unblocked: " + s_blockedEvents.back()).c_str());
+    if (ImGui::Button(L("Unblock", "إلغاء الحظر##event")) && !s_blockedEvents.empty()) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Event unblocked", "تم فك حظر الحدث"),
+                 s_blockedEvents.back().c_str());
+        FeatureAction(msg);
         s_blockedEvents.pop_back();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Block All Events", &s_blockAllEvents);
+    ImGui::Checkbox(L("Block All Events", "حظر كل الأحداث"), &s_blockAllEvents);
     static char trig[96] = "";
-    ImGui::InputTextWithHint("##trigger_input", "triggerServerEvent name...", trig, sizeof(trig));
+    ImGui::InputTextWithHint("##trigger_input", L("triggerServerEvent name...",
+                                                  "اسم triggerServerEvent..."), trig, sizeof(trig));
     ImGui::SameLine();
-    if (ImGui::Button("Add to Block List") && trig[0]) {
+    if (ImGui::Button(L("Add to Block List", "أضف لقائمة الحظر")) && trig[0]) {
         s_blockedEvents.push_back(trig);
-        FeatureAction(("Event blocked: " + std::string(trig)).c_str());
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Event blocked", "تم حظر الحدث"), trig);
+        FeatureAction(msg);
         trig[0] = 0;
     }
     ImGui::Separator();
-    ImGui::Text("Recent Triggers (click Block to filter):");
-    if (s_recentTriggers.empty()) ImGui::TextDisabled("No triggers");
+    ImGui::Text("%s", L("Recent Triggers (click Block to filter):",
+                        "الأحداث الأخيرة (اضغط حظر للفلترة):"));
+    if (s_recentTriggers.empty()) ImGui::TextDisabled("%s", L("No triggers", "لا أحداث"));
     for (int i = 0; i < (int)s_recentTriggers.size(); ++i) {
         ImGui::PushID(i);
         ImGui::BulletText("%s", s_recentTriggers[i].c_str());
         ImGui::SameLine(280);
-        if (ImGui::SmallButton("Block")) {
+        if (ImGui::SmallButton(L("Block", "حظر"))) {
             s_blockedEvents.push_back(s_recentTriggers[i]);
-            FeatureAction(("Event blocked: " + s_recentTriggers[i]).c_str());
+            char msg[192];
+            snprintf(msg, sizeof(msg), "%s: %s", L("Event blocked", "تم حظر الحدث"),
+                     s_recentTriggers[i].c_str());
+            FeatureAction(msg);
         }
         ImGui::PopID();
     }
@@ -899,23 +1271,24 @@ static void DrawEvents()
 
 static void DrawEventsTable()
 {
-    ImGui::TextDisabled("Events Table (live event registry view)");
+    ImGui::TextDisabled("%s", L("Events Table (live event registry view)",
+                                "جدول الأحداث (سجل مباشر)"));
     if (ImGui::BeginTable("##events_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Event");
-        ImGui::TableSetupColumn("Source");
-        ImGui::TableSetupColumn("State");
+        ImGui::TableSetupColumn(L("Event", "الحدث"));
+        ImGui::TableSetupColumn(L("Source", "المصدر"));
+        ImGui::TableSetupColumn(L("State", "الحالة"));
         ImGui::TableHeadersRow();
         for (auto &e : s_recentTriggers) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(e.c_str());
             ImGui::TableNextColumn(); ImGui::TextDisabled("client");
-            ImGui::TableNextColumn(); ImGui::TextDisabled("tracked");
+            ImGui::TableNextColumn(); ImGui::TextDisabled("%s", L("tracked", "متابع"));
         }
         for (auto &e : s_blockedEvents) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(e.c_str());
             ImGui::TableNextColumn(); ImGui::TextDisabled("client");
-            ImGui::TableNextColumn(); ImGui::TextColored(kAccentHover, "(blocked)");
+            ImGui::TableNextColumn(); ImGui::TextColored(kBloodHi, "%s", L("(blocked)", "(محظور)"));
         }
         ImGui::EndTable();
     }
@@ -924,25 +1297,26 @@ static void DrawEventsTable()
 static void DrawPackets()
 {
     EnsurePacketsPopulated();
-    if (ImGui::Button("Refresh")) {
+    if (ImGui::Button(L("Refresh", "تحديث"))) {
         s_packetsPopulated = false;
         s_packets.clear();
         EnsurePacketsPopulated();
-        FeatureAction("Refresh");
+        FeatureAction(L("Refresh", "تم التحديث"));
     }
     ImGui::SameLine();
-    ImGui::Text("Packets: %zu", s_packets.size());
+    ImGui::Text("%s: %zu", L("Packets", "الباكيتات"), s_packets.size());
     ImGui::SameLine();
-    if (ImGui::Button("Clear All")) s_packets.clear();
+    if (ImGui::Button(L("Clear All", "مسح الكل"))) s_packets.clear();
     ImGui::SameLine();
-    if (ImGui::Button("Unblock All"))
+    if (ImGui::Button(L("Unblock All", "فك حظر الكل")))
         for (auto &p : s_packets) p.blocked = false;
     ImGui::SameLine();
-    ImGui::InputTextWithHint("##packet_search", "Search packet...", s_packetSearch, sizeof(s_packetSearch));
+    ImGui::InputTextWithHint("##packet_search", L("Search packet...", "بحث عن باكيت..."),
+                             s_packetSearch, sizeof(s_packetSearch));
 
     ImGui::BeginChild("packets_left", ImVec2(-320, -1), true);
     if (s_packets.empty()) {
-        ImGui::TextDisabled("No packets detected.");
+        ImGui::TextDisabled("%s", L("No packets detected.", "لا يوجد باكيتات."));
     }
     for (int i = 0; i < (int)s_packets.size(); ++i) {
         if (s_packetSearch[0] && s_packets[i].name.find(s_packetSearch) == std::string::npos) {
@@ -951,7 +1325,8 @@ static void DrawPackets()
         ImGui::PushID(i);
         if (ImGui::Selectable(s_packets[i].name.c_str(), s_packetSel == i)) s_packetSel = i;
         ImGui::SameLine();
-        ImGui::TextDisabled("%s", s_packets[i].blocked ? "BLOCKED" : "UNBLOCKED");
+        ImGui::TextDisabled("%s", s_packets[i].blocked ? L("BLOCKED", "محظور")
+                                                       : L("UNBLOCKED", "مفتوح"));
         ImGui::PopID();
     }
     ImGui::EndChild();
@@ -959,27 +1334,30 @@ static void DrawPackets()
     ImGui::BeginChild("packets_right", ImVec2(0, -1), true);
     if (s_packetSel >= 0 && s_packetSel < (int)s_packets.size()) {
         const PacketRow &p = s_packets[s_packetSel];
-        ImGui::Text("Name: %s", p.name.c_str());
-        ImGui::Text("Time: %s", p.time.c_str());
+        ImGui::Text("%s: %s", L("Name", "الاسم"), p.name.c_str());
+        ImGui::Text("%s: %s", L("Time", "الوقت"), p.time.c_str());
         ImGui::Text("ID: %d", p.id);
-        ImGui::TextColored(kAccentHover, "%s", p.blocked ? "BLOCKED" : "UNBLOCKED");
-        if (ImGui::Button("Block Packet"))
+        ImGui::TextColored(kBloodHi, "%s", p.blocked ? L("BLOCKED", "محظور")
+                                                     : L("UNBLOCKED", "مفتوح"));
+        if (ImGui::Button(L("Block Packet", "حظر الباكيت")))
             s_packets[s_packetSel].blocked = !s_packets[s_packetSel].blocked;
         ImGui::SameLine();
-        if (ImGui::Button("Resend")) {
-            char msg[160];
-            snprintf(msg, sizeof(msg), "Resending packet: %s", p.name.c_str());
+        if (ImGui::Button(L("Resend", "إعادة إرسال"))) {
+            char msg[192];
+            snprintf(msg, sizeof(msg), "%s: %s", L("Resending packet", "إعادة إرسال الباكيت"),
+                     p.name.c_str());
             FeatureAction(msg);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Copy Name")) {
+        if (ImGui::Button(L("Copy Name", "نسخ الاسم"))) {
             ImGui::SetClipboardText(p.name.c_str());
-            char msg[160];
-            snprintf(msg, sizeof(msg), "Packet name copied: %s", p.name.c_str());
+            char msg[192];
+            snprintf(msg, sizeof(msg), "%s: %s", L("Packet name copied", "تم نسخ اسم الباكيت"),
+                     p.name.c_str());
             FeatureAction(msg);
         }
     } else {
-        ImGui::TextDisabled("Select a packet");
+        ImGui::TextDisabled("%s", L("Select a packet", "اختر باكيت"));
     }
     ImGui::EndChild();
 }
@@ -1011,38 +1389,42 @@ static void DrawDumper()
 {
     static int dumpSel = -1;
     static char dumpFilter[64] = "";
-    ImGui::InputTextWithHint("##dump_filter", "Search captured scripts...", dumpFilter, sizeof(dumpFilter));
+    ImGui::InputTextWithHint("##dump_filter", L("Search captured scripts...", "بحث في السكربتات الملتقطة..."),
+                             dumpFilter, sizeof(dumpFilter));
     ImGui::SameLine();
-    if (ImGui::Button("Dump Selected") && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
+    if (ImGui::Button(L("Dump Selected", "تفريغ المحدد")) && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
         if (SaveDumperEntryToDisk(s_dumperEntries[dumpSel])) {
-            FeatureAction(("Dump script saved: " + s_dumperEntries[dumpSel].name).c_str());
+            char msg[320];
+            snprintf(msg, sizeof(msg), "%s: %s", L("Dump script saved", "تم حفظ السكربت"),
+                     s_dumperEntries[dumpSel].name.c_str());
+            FeatureAction(msg);
         } else {
-            FeatureAction("Failed to save dump file");
+            FeatureAction(L("Failed to save dump file", "فشل حفظ ملف التفريغ"));
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Dump All")) {
+    if (ImGui::Button(L("Dump All", "تفريغ الكل"))) {
         int saved = 0;
         for (const auto &e : s_dumperEntries) {
             if (SaveDumperEntryToDisk(e)) ++saved;
         }
         char msg[128];
-        snprintf(msg, sizeof(msg), "Dump all scripts saved (%d)", saved);
+        snprintf(msg, sizeof(msg), "%s (%d)", L("Dump all scripts saved", "تم حفظ كل السكربتات"), saved);
         FeatureAction(msg);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load in Editor") && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
+    if (ImGui::Button(L("Load in Editor", "تحميل في المحرر")) && dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
         const std::string &code = s_dumperEntries[dumpSel].code;
         size_t copyLen = code.size() < (sizeof(s_editorBuf) - 1) ? code.size() : (sizeof(s_editorBuf) - 1);
         memcpy(s_editorBuf, code.data(), copyLen);
         s_editorBuf[copyLen] = '\0';
         s_topTab = 0;
         s_scriptsSub = 0;
-        FeatureAction("Loaded script into editor");
+        FeatureAction(L("Loaded script into editor", "تم تحميل السكربت في المحرر"));
     }
 
     ImGui::BeginChild("##dumper_left", ImVec2(280, -1), true);
-    ImGui::Text("Captured Scripts (%zu)", s_dumperEntries.size());
+    ImGui::Text("%s (%zu)", L("Captured Scripts", "السكربتات الملتقطة"), s_dumperEntries.size());
     ImGui::Separator();
     for (int i = 0; i < (int)s_dumperEntries.size(); ++i) {
         if (dumpFilter[0] && s_dumperEntries[i].name.find(dumpFilter) == std::string::npos) continue;
@@ -1051,59 +1433,62 @@ static void DrawDumper()
         }
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Resolved Offsets (0x1000c390)");
+    ImGui::TextDisabled("%s", L("Resolved Offsets (0x1000c390)", "العناوين المكتشفة (0x1000c390)"));
     uint32_t count = 0;
     const uintptr_t *offsets = Nrth_GetClientResolvedOffsets(&count);
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t addr = offsets[i] ? (uint32_t)offsets[i] : (0x10000000u + i * 0x10u);
-        ImGui::Text("0x%08X (#%02u %s)", addr, i + 1, offsets[i] ? "ok" : "pend");
+        ImGui::Text("0x%08X (#%02u %s)", addr, i + 1, offsets[i] ? "ok" : "...");
     }
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##dumper_right", ImVec2(0, -1), true);
     if (dumpSel >= 0 && dumpSel < (int)s_dumperEntries.size()) {
         const DumperFileEntry &e = s_dumperEntries[dumpSel];
-        ImGui::Text("Chunk: %s (%zu bytes)", e.name.c_str(), e.code.size());
+        ImGui::Text("%s: %s (%zu %s)", L("Chunk", "المقطع"), e.name.c_str(), e.code.size(),
+                    L("bytes", "بايت"));
         ImGui::Separator();
         if (e.code.size() > 65536) {
-            ImGui::TextDisabled("File big, no view script");
+            ImGui::TextDisabled("%s", L("File big, no view script", "الملف كبير، لا يمكن العرض"));
         } else {
             ImGui::TextUnformatted(e.code.c_str());
         }
     } else {
-        ImGui::TextDisabled("Select a captured script from the left panel to preview or dump to C:\\NVX\\dump\\");
+        ImGui::TextDisabled("%s", L("Select a captured script from the left panel to preview or dump to C:\\NVX\\dump\\",
+                                    "اختر سكربت من القائمة اليسرى للمعاينة أو الحفظ في C:\\NVX\\dump\\"));
     }
     ImGui::EndChild();
 }
 
 static void DrawPlayerTab()
 {
-    ImGui::InputTextWithHint("##player_filter", "filter...", s_playerFilterBuf, sizeof(s_playerFilterBuf));
+    ImGui::InputTextWithHint("##player_filter", L("filter...", "فلتر..."),
+                             s_playerFilterBuf, sizeof(s_playerFilterBuf));
     ImGui::SetNextItemWidth(280);
-    std::string preview = s_players.empty() ? "Select player..." :
-        (s_players[s_playerSel].name + (s_players[s_playerSel].isYou ? " (you)" : ""));
+    std::string preview = s_players.empty() ? L("Select player...", "اختر لاعب...") :
+        (s_players[s_playerSel].name + (s_players[s_playerSel].isYou ? std::string(" (") + L("you", "أنت") + ")" : ""));
     if (ImGui::BeginCombo("##player_combo", preview.c_str())) {
         for (int i = 0; i < (int)s_players.size(); ++i) {
             if (s_playerFilterBuf[0] && s_players[i].name.find(s_playerFilterBuf) == std::string::npos) continue;
-            std::string lbl = s_players[i].name + (s_players[i].isYou ? " (you)" : "");
+            std::string lbl = s_players[i].name + (s_players[i].isYou ? std::string(" (") + L("you", "أنت") + ")" : "");
             if (ImGui::Selectable(lbl.c_str(), s_playerSel == i)) s_playerSel = i;
         }
-        if (s_players.empty()) ImGui::TextDisabled("No players found");
+        if (s_players.empty()) ImGui::TextDisabled("%s", L("No players found", "لا لاعبين"));
         ImGui::EndCombo();
     }
-    if (ImGui::Button("Teleport")) FeatureAction("Teleport");
+    if (ImGui::Button(L("Teleport", "تنقل"))) FeatureAction(L("Teleport", "تنقل"));
     ImGui::SameLine();
-    if (ImGui::Button("Bomb")) FeatureAction("Bomb");
+    if (ImGui::Button(L("Bomb", "تفجير"))) FeatureAction(L("Bomb", "تفجير"));
     ImGui::SameLine();
-    if (ImGui::Button("Add Friend")) {
+    if (ImGui::Button(L("Add Friend", "إضافة صديق"))) {
         if (!s_players.empty()) s_friends.push_back(s_players[s_playerSel].name);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Delete Friend") && !s_friends.empty())
+    if (ImGui::Button(L("Delete Friend", "حذف صديق")) && !s_friends.empty())
         s_friends.pop_back();
     ImGui::Separator();
-    ImGui::Text("Friend's list");
-    if (s_friends.empty()) ImGui::TextDisabled("No friends added");
+    ImGui::Text("%s", L("Friend's list", "قائمة الأصدقاء"));
+    if (s_friends.empty()) ImGui::TextDisabled("%s", L("No friends added", "لا أصدقاء"));
     for (auto &f : s_friends) ImGui::BulletText("%s", f.c_str());
 }
 
@@ -1111,82 +1496,87 @@ static void TriggerFeatureImmediateAction(Feature &f)
 {
     if (strcmp(f.label, "All Weapons") == 0 && f.on) {
         Nrth_TriggerAllWeapons_1002a5a7();
-        FeatureAction("All weapons given (1000 ammo)");
+        FeatureAction(L("All weapons given (1000 ammo)", "تم إعطاء كل الأسلحة (1000 ذخيرة)"));
         return;
     }
     if (strcmp(f.label, "Jetpack") == 0) {
         Nrth_TriggerJetpack_1002a86c();
-        FeatureAction(f.on ? "Jetpack enabled" : "Jetpack disabled");
+        FeatureAction(f.on ? L("Jetpack enabled", "تم تفعيل الجت باك")
+                           : L("Jetpack disabled", "تم إيقاف الجت باك"));
         return;
     }
     if (strcmp(f.label, "Repair Car") == 0 && f.on) {
         if (Nrth_RepairCurrentVehicle_1002f070()) {
-            FeatureAction("Vehicle repaired");
+            FeatureAction(L("Vehicle repaired", "تم إصلاح المركبة"));
         } else {
-            FeatureAction("You must be in a vehicle");
+            FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
         }
         return;
     }
     if (strcmp(f.label, "Start Engine") == 0 && f.on) {
         if (Nrth_StartCurrentVehicleEngine_1002f0f0()) {
-            FeatureAction("Engine started");
+            FeatureAction(L("Engine started", "تم تشغيل المحرك"));
         } else {
-            FeatureAction("You must be in a vehicle");
+            FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
         }
         return;
     }
     if (strcmp(f.label, "Unlock Car") == 0 && f.on) {
         if (Nrth_UnlockNearestVehicle_1002eea0()) {
-            FeatureAction("Unlocked nearest vehicle");
+            FeatureAction(L("Unlocked nearest vehicle", "تم فتح أقرب مركبة"));
         } else {
-            FeatureAction("No vehicle found nearby");
+            FeatureAction(L("No vehicle found nearby", "لا توجد مركبة قريبة"));
         }
         return;
     }
-    char msg[128];
-    snprintf(msg, sizeof(msg), "%s %s", f.label, f.on ? "enabled" : "disabled");
+    char msg[256];
+    snprintf(msg, sizeof(msg), "%s %s", FeatureTr(f.label),
+             f.on ? L("enabled", "مفعل") : L("disabled", "موقوف"));
     FeatureAction(msg);
 }
 
 static void FeatureRow(Feature &f, const char *id)
 {
     ImGui::PushID(id);
-    if (ImGui::Checkbox(f.label, &f.on)) {
+    if (ImGui::Checkbox(FeatureTr(f.label), &f.on)) {
         NrthUI_SyncFeaturesToState();
         TriggerFeatureImmediateAction(f);
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("##gear")) ImGui::OpenPopup("##settings_panel");
     if (ImGui::BeginPopup("##settings_panel")) {
-        ImGui::TextUnformatted(f.settings);
+        ImGui::TextUnformatted(FeatureTr(f.label));
         ImGui::Separator();
         if (strcmp(f.label, "Give HP") == 0) {
-            if (ImGui::SliderFloat("HP Value##sp", &s_hpValue, 1, 200)) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("HP Value", "قيمة الدم##sp"), &s_hpValue, 1, 200)) NrthUI_SyncFeaturesToState();
         } else if (strcmp(f.label, "Give Armor") == 0) {
-            if (ImGui::SliderFloat("Armor Value##sp", &s_armorValue, 1, 200)) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("Armor Value", "قيمة الدرع##sp"), &s_armorValue, 1, 200)) NrthUI_SyncFeaturesToState();
         } else if (strcmp(f.label, "AirBreak") == 0) {
-            if (ImGui::SliderFloat("Speed: %.2f", &s_abSpeed, 0.1f, 10.f)) NrthUI_SyncFeaturesToState();
-            if (ImGui::SliderFloat("Increment: %.2f", &s_abIncr, 0.05f, 2.f)) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("Speed", "السرعة##sp"), &s_abSpeed, 0.1f, 10.f, "%.2f")) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("Increment", "التسارع##sp"), &s_abIncr, 0.05f, 2.f, "%.2f")) NrthUI_SyncFeaturesToState();
             ImGui::Separator();
-            ImGui::Text("Keybinds");
-            ImGui::BulletText("Forward: W"); ImGui::BulletText("Back: S");
-            ImGui::BulletText("Left: A");    ImGui::BulletText("Right: D");
-            ImGui::BulletText("Up: Space / Down: LCtrl");
+            ImGui::Text("%s", L("Keybinds", "المفاتيح"));
+            ImGui::BulletText("%s", L("Forward: W", "أمام: W"));
+            ImGui::BulletText("%s", L("Back: S", "خلف: S"));
+            ImGui::BulletText("%s", L("Left: A", "يسار: A"));
+            ImGui::BulletText("%s", L("Right: D", "يمين: D"));
+            ImGui::BulletText("%s", L("Up: Space / Down: LCtrl", "فوق: Space / تحت: LCtrl"));
         } else if (strcmp(f.label, "Click Warp") == 0) {
-            if (ImGui::SliderFloat("Max Distance##sp", &s_maxDist, 10, 1000)) NrthUI_SyncFeaturesToState();
-            if (ImGui::SliderFloat("Crosshair Size##sp", &s_crossSize, 2, 40)) NrthUI_SyncFeaturesToState();
-            if (ImGui::Checkbox("Ground Warp##sp", &s_groundWarp)) NrthUI_SyncFeaturesToState();
-            if (ImGui::Checkbox("Enter Vehicle##sp", &s_enterVehicle)) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("Max Distance", "أقصى مسافة##sp"), &s_maxDist, 10, 1000, "%.0f")) NrthUI_SyncFeaturesToState();
+            if (ImGui::SliderFloat(L("Crosshair Size", "حجم التصويبة##sp"), &s_crossSize, 2, 40, "%.0f")) NrthUI_SyncFeaturesToState();
+            if (ImGui::Checkbox(L("Ground Warp", "تنقل أرضي##sp"), &s_groundWarp)) NrthUI_SyncFeaturesToState();
+            if (ImGui::Checkbox(L("Enter Vehicle", "دخول المركبة##sp"), &s_enterVehicle)) NrthUI_SyncFeaturesToState();
         } else if (strcmp(f.label, "Anti-ScreenShot") == 0) {
-            if (ImGui::Checkbox("Hide obs/discord", &s_hideObsDiscord)) NrthUI_SyncFeaturesToState();
+            if (ImGui::Checkbox(L("Hide obs/discord", "إخفاء obs/discord"), &s_hideObsDiscord)) NrthUI_SyncFeaturesToState();
         } else if (strcmp(f.label, "Anti-AFK") == 0) {
-            ImGui::Checkbox("Anti-AFK", &s_antiAfk);
+            ImGui::Checkbox(L("Anti-AFK", "منع الطرد للخمول"), &s_antiAfk);
         } else {
-            ImGui::TextDisabled("settings synced to SPlayerHealthSync/SWeaponAimSync");
+            ImGui::TextDisabled("%s", L("settings synced to cheat engine state",
+                                        "الإعدادات متزامنة مع محرك الغش"));
         }
         ImGui::Separator();
         if (s_capturingFeature == &f) {
-            ImGui::Button("Press a key...");
+            ImGui::Button(L("Press a key...", "اضغط أي زر..."));
             for (int vk = 1; vk < 256; ++vk) {
                 if (vk == VK_LBUTTON || vk == VK_RBUTTON) continue;
                 if (GetAsyncKeyState(vk) & 1) {
@@ -1196,16 +1586,16 @@ static void FeatureRow(Feature &f, const char *id)
                 }
             }
         } else {
-            char keyBtn[64];
-            if (f.key > 0) snprintf(keyBtn, sizeof(keyBtn), "Key: %d (click to change)", f.key);
-            else           snprintf(keyBtn, sizeof(keyBtn), "Press a key...");
+            char keyBtn[96];
+            if (f.key > 0) snprintf(keyBtn, sizeof(keyBtn), "%s: %d", L("Key", "زر"), f.key);
+            else           snprintf(keyBtn, sizeof(keyBtn), "%s", L("Press a key...", "اضغط أي زر..."));
             if (ImGui::Button(keyBtn)) {
                 s_capturingFeature = &f;
             }
         }
         ImGui::SameLine();
-        const char *modes[] = { "Hold", "Toggle" };
-        ImGui::SetNextItemWidth(90);
+        const char *modes[] = { L("Hold", "ضغط مستمر"), L("Toggle", "تبديل") };
+        ImGui::SetNextItemWidth(110);
         ImGui::Combo("##mode", &f.mode, modes, 2);
         ImGui::EndPopup();
     }
@@ -1214,7 +1604,7 @@ static void FeatureRow(Feature &f, const char *id)
 
 static void DrawOtherTab()
 {
-    ImGui::TextDisabled("Feature toggles (synced to SPlayerHealthSync / SWeaponAimSync)");
+    ImGui::TextDisabled("%s", L("Feature toggles (live synced)", "الميزات (مزامنة حية)"));
     for (int i = 0; i < (int)(sizeof(s_cheatFeatures) / sizeof(Feature)); ++i) {
         char id[32];
         snprintf(id, sizeof(id), "cf%d", i);
@@ -1222,68 +1612,74 @@ static void DrawOtherTab()
     }
     ImGui::Separator();
     /* Action buttons matching 0x1002a580..0x1002a880 in NRTH.dll */
-    if (ImGui::Button("All Weapons")) {
+    if (ImGui::Button(L("All Weapons", "كل الأسلحة"))) {
         s_cheatFeatures[13].on = true;
         NrthUI_SyncFeaturesToState();
         Nrth_TriggerAllWeapons_1002a5a7();
-        FeatureAction("All weapons given (1000 ammo)");
+        FeatureAction(L("All weapons given (1000 ammo)", "تم إعطاء كل الأسلحة (1000 ذخيرة)"));
     }
     ImGui::SameLine();
-    if (ImGui::Button("High Jump")) {
+    if (ImGui::Button(L("High Jump", "قفز عالي"))) {
         s_cheatFeatures[10].on = !s_cheatFeatures[10].on;
         NrthUI_SyncFeaturesToState();
-        FeatureAction(s_cheatFeatures[10].on ? "High Jump enabled" : "High Jump disabled");
+        FeatureAction(s_cheatFeatures[10].on ? L("High Jump enabled", "تم تفعيل القفز العالي")
+                                             : L("High Jump disabled", "تم إيقاف القفز العالي"));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Money Exploit")) {
+    if (ImGui::Button(L("Money Exploit", "استغلال الفلوس"))) {
         s_cheatFeatures[11].on = !s_cheatFeatures[11].on;
         if (s_cheatFeatures[11].on) {
             static const char kMoneyLua[] = "givePlayerMoney(50000)";
             NrthUI_ExecuteLuaViaBridge(kMoneyLua, sizeof(kMoneyLua) - 1, 0);
         }
-        FeatureAction(s_cheatFeatures[11].on ? "Money Exploit enabled" : "Money Exploit disabled");
+        FeatureAction(s_cheatFeatures[11].on ? L("Money Exploit enabled", "تم تفعيل استغلال الفلوس")
+                                             : L("Money Exploit disabled", "تم إيقاف استغلال الفلوس"));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Jetpack")) {
+    if (ImGui::Button(L("Jetpack", "جت باك"))) {
         s_cheatFeatures[12].on = !s_cheatFeatures[12].on;
         NrthUI_SyncFeaturesToState();
         Nrth_TriggerJetpack_1002a86c();
-        FeatureAction(s_cheatFeatures[12].on ? "Jetpack enabled" : "Jetpack disabled");
+        FeatureAction(s_cheatFeatures[12].on ? L("Jetpack enabled", "تم تفعيل الجت باك")
+                                             : L("Jetpack disabled", "تم إيقاف الجت باك"));
     }
     if (!s_lastAction.empty()) ImGui::TextDisabled("last: %s", s_lastAction.c_str());
 }
 
 static void DrawMarkersTab()
 {
-    ImGui::InputTextWithHint("##marker_name", "marker name...", s_markerName, sizeof(s_markerName));
+    ImGui::InputTextWithHint("##marker_name", L("marker name...", "اسم العلامة..."),
+                             s_markerName, sizeof(s_markerName));
     ImGui::SameLine();
-    if (ImGui::Button("Save") && s_markerName[0]) {
+    if (ImGui::Button(L("Save", "حفظ")) && s_markerName[0]) {
         float mx = 0.0f, my = 0.0f, mz = 0.0f;
         Nrth_GetLocalPlayerPosition(&mx, &my, &mz);
         MarkerRow m = {s_markerName, mx, my, mz};
         s_markers.push_back(m);
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Marker saved: %s", s_markerName);
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Marker saved", "تم حفظ العلامة"), s_markerName);
         FeatureAction(msg);
         s_markerName[0] = 0;
     }
-    if (s_markers.empty()) ImGui::TextDisabled("No markers saved");
+    if (s_markers.empty()) ImGui::TextDisabled("%s", L("No markers saved", "لا علامات محفوظة"));
     for (int i = 0; i < (int)s_markers.size(); ++i) {
         ImGui::PushID(i);
         MarkerRow &m = s_markers[i];
-        char line[128];
+        char line[160];
         snprintf(line, sizeof(line), "%s (%.1f, %.1f, %.1f)", m.name.c_str(), m.x, m.y, m.z);
         ImGui::BulletText("%s", line);
         ImGui::SameLine(280);
-        if (ImGui::SmallButton("Teleport")) {
+        if (ImGui::SmallButton(L("Teleport", "تنقل"))) {
             if (Nrth_TeleportLocalPlayer(m.x, m.y, m.z)) {
-                FeatureAction(("Teleported to: " + m.name).c_str());
+                char msg[192];
+                snprintf(msg, sizeof(msg), "%s: %s", L("Teleported to", "تم التنقل إلى"), m.name.c_str());
+                FeatureAction(msg);
             } else {
-                FeatureAction("Teleport");
+                FeatureAction(L("Teleport", "تنقل"));
             }
         }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Delete")) {
+        if (ImGui::SmallButton(L("Delete", "حذف"))) {
             s_markers.erase(s_markers.begin() + i);
             ImGui::PopID();
             break;
@@ -1296,7 +1692,7 @@ static void DrawVehicleTab()
 {
     ImGui::Columns(2, "##vehcols", false);
     ImGui::SetColumnWidth(0, 300);
-    ImGui::Text("Vehicle's");
+    ImGui::Text("%s", L("Vehicle's", "المركبات"));
     ImGui::Separator();
     for (int i = 0; i < (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)); ++i) {
         char id[32];
@@ -1305,87 +1701,84 @@ static void DrawVehicleTab()
     }
     ImGui::NextColumn();
 
-    ImGui::Text("Vehicles List");
+    ImGui::Text("%s", L("Vehicles List", "قائمة المركبات"));
     ImGui::SetNextItemWidth(-1);
     std::string prev = std::string(kVehicleNames[s_vehicleSel]) + " (HP: 1000)";
-    if (ImGui::BeginCombo("##vehicles_combo", s_vehicleSel >= 0 ? prev.c_str() : "Select vehicle...")) {
+    if (ImGui::BeginCombo("##vehicles_combo", s_vehicleSel >= 0 ? prev.c_str() : L("Select vehicle...", "اختر مركبة..."))) {
         for (int i = 0; i < (int)(sizeof(kVehicleNames) / sizeof(kVehicleNames[0])); ++i) {
             if (ImGui::Selectable(kVehicleNames[i], s_vehicleSel == i)) s_vehicleSel = i;
         }
         ImGui::EndCombo();
     }
-    if (ImGui::Button("Teleport to Vehicle")) FeatureAction("Teleport to Vehicle");
+    if (ImGui::Button(L("Teleport to Vehicle", "تنقل إلى المركبة"))) FeatureAction(L("Teleport to Vehicle", "تنقل إلى المركبة"));
     ImGui::SameLine();
-    if (ImGui::Button("Teleport Vehicle")) FeatureAction("Vehicle teleported to you");
+    if (ImGui::Button(L("Teleport Vehicle", "إحضار المركبة"))) FeatureAction(L("Vehicle teleported to you", "تم إحضار المركبة إليك"));
     ImGui::SameLine();
-    if (ImGui::Button("Bomb Car")) {
-        if (Nrth_DestroyCurrentVehicle()) FeatureAction("Vehicle destroyed");
-        else FeatureAction("You must be in a vehicle");
+    if (ImGui::Button(L("Bomb Car", "تفجير السيارة"))) {
+        if (Nrth_DestroyCurrentVehicle()) FeatureAction(L("Vehicle destroyed", "تم تفجير المركبة"));
+        else FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
     }
-    if (ImGui::Button("Repair Car")) {
-        if (Nrth_RepairCurrentVehicle_1002f070()) FeatureAction("Vehicle repaired");
-        else FeatureAction("You must be in a vehicle");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Start Engine")) {
-        if (Nrth_StartCurrentVehicleEngine_1002f0f0()) FeatureAction("Engine started");
-        else FeatureAction("You must be in a vehicle");
+    if (ImGui::Button(L("Repair Car", "إصلاح السيارة"))) {
+        if (Nrth_RepairCurrentVehicle_1002f070()) FeatureAction(L("Vehicle repaired", "تم إصلاح المركبة"));
+        else FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Stop")) {
-        if (Nrth_StopCurrentVehicle()) FeatureAction("Vehicle stopped");
-        else FeatureAction("You must be in a vehicle");
+    if (ImGui::Button(L("Start Engine", "تشغيل المحرك"))) {
+        if (Nrth_StartCurrentVehicleEngine_1002f0f0()) FeatureAction(L("Engine started", "تم تشغيل المحرك"));
+        else FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Unlock Car")) {
-        if (Nrth_UnlockNearestVehicle_1002eea0()) FeatureAction("Unlocked nearest vehicle");
-        else FeatureAction("No vehicle found nearby");
+    if (ImGui::Button(L("Stop", "إيقاف"))) {
+        if (Nrth_StopCurrentVehicle()) FeatureAction(L("Vehicle stopped", "تم إيقاف المركبة"));
+        else FeatureAction(L("You must be in a vehicle", "يجب أن تكون داخل مركبة"));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(L("Unlock Car", "فتح السيارة"))) {
+        if (Nrth_UnlockNearestVehicle_1002eea0()) FeatureAction(L("Unlocked nearest vehicle", "تم فتح أقرب مركبة"));
+        else FeatureAction(L("No vehicle found nearby", "لا توجد مركبة قريبة"));
     }
     ImGui::Columns(1);
 }
 
 static void DrawColorSettings()
 {
-    if (ImGui::TreeNode("Color Settings")) {
+    if (ImGui::TreeNode(L("Color Settings", "إعدادات الألوان"))) {
         static char filter[64] = "";
-        ImGui::InputTextWithHint("##filter", "Search color...", filter, sizeof(filter));
-        static const struct { const char *name; ImGuiCol col; } kColors[] = {
-            {"Text", ImGuiCol_Text}, {"Text Disabled", ImGuiCol_TextDisabled},
-            {"Window BG", ImGuiCol_WindowBg}, {"Child BG", ImGuiCol_ChildBg},
-            {"Popup BG", ImGuiCol_PopupBg}, {"Border", ImGuiCol_Border},
-            {"Border Shadow", ImGuiCol_BorderShadow},
-            {"Frame BG", ImGuiCol_FrameBg}, {"Frame BG Hovered", ImGuiCol_FrameBgHovered},
-            {"Frame BG Active", ImGuiCol_FrameBgActive},
-            {"Title BG", ImGuiCol_TitleBg}, {"Title BG Active", ImGuiCol_TitleBgActive},
-            {"Title BG Collapsed", ImGuiCol_TitleBgCollapsed},
-            {"Menu Bar BG", ImGuiCol_MenuBarBg},
-            {"Scrollbar BG", ImGuiCol_ScrollbarBg},
-            {"Scrollbar Grab", ImGuiCol_ScrollbarGrab},
-            {"Scrollbar Grab Hovered", ImGuiCol_ScrollbarGrabHovered},
-            {"Scrollbar Grab Active", ImGuiCol_ScrollbarGrabActive},
-            {"Check Mark", ImGuiCol_CheckMark}, {"Slider Grab", ImGuiCol_SliderGrab},
-            {"Slider Grab Active", ImGuiCol_SliderGrabActive},
-            {"Button", ImGuiCol_Button}, {"Button Hovered", ImGuiCol_ButtonHovered},
-            {"Button Active", ImGuiCol_ButtonActive},
-            {"Header", ImGuiCol_Header}, {"Header Hovered", ImGuiCol_HeaderHovered},
-            {"Header Active", ImGuiCol_HeaderActive},
-            {"Separator Hovered", ImGuiCol_SeparatorHovered},
-            {"Separator Active", ImGuiCol_SeparatorActive},
-            {"Tab", ImGuiCol_Tab}, {"Tab Hovered", ImGuiCol_TabHovered},
-            {"Tab Active", ImGuiCol_TabActive},
-            {"Resize Grip", ImGuiCol_ResizeGrip},
-            {"Resize Grip Hovered", ImGuiCol_ResizeGripHovered},
-            {"Resize Grip Active", ImGuiCol_ResizeGripActive},
-            {"Text Selected BG", ImGuiCol_TextSelectedBg},
+        ImGui::InputTextWithHint("##filter", L("Search color...", "بحث عن لون..."), filter, sizeof(filter));
+        static const struct { const char *name; const char *ar; ImGuiCol col; } kColors[] = {
+            {"Text", "النص", ImGuiCol_Text},
+            {"Text Disabled", "نص معطل", ImGuiCol_TextDisabled},
+            {"Window BG", "خلفية النافذة", ImGuiCol_WindowBg},
+            {"Child BG", "خلفية اللوحة", ImGuiCol_ChildBg},
+            {"Popup BG", "خلفية النافذة المنبثقة", ImGuiCol_PopupBg},
+            {"Border", "الحدود", ImGuiCol_Border},
+            {"Frame BG", "خلفية الإطار", ImGuiCol_FrameBg},
+            {"Frame BG Hovered", "خلفية الإطار (تمرير)", ImGuiCol_FrameBgHovered},
+            {"Frame BG Active", "خلفية الإطار (نشط)", ImGuiCol_FrameBgActive},
+            {"Title BG", "خلفية العنوان", ImGuiCol_TitleBg},
+            {"Title BG Active", "خلفية العنوان (نشط)", ImGuiCol_TitleBgActive},
+            {"Scrollbar Grab", "مقبض التمرير", ImGuiCol_ScrollbarGrab},
+            {"Check Mark", "علامة الصح", ImGuiCol_CheckMark},
+            {"Slider Grab", "مقبض السلايدر", ImGuiCol_SliderGrab},
+            {"Button", "الزر", ImGuiCol_Button},
+            {"Button Hovered", "الزر (تمرير)", ImGuiCol_ButtonHovered},
+            {"Button Active", "الزر (نشط)", ImGuiCol_ButtonActive},
+            {"Header", "العنوان", ImGuiCol_Header},
+            {"Header Hovered", "العنوان (تمرير)", ImGuiCol_HeaderHovered},
+            {"Header Active", "العنوان (نشط)", ImGuiCol_HeaderActive},
+            {"Tab", "التاب", ImGuiCol_Tab},
+            {"Tab Hovered", "التاب (تمرير)", ImGuiCol_TabHovered},
+            {"Tab Active", "التاب (نشط)", ImGuiCol_TabActive},
+            {"Text Selected BG", "خلفية النص المحدد", ImGuiCol_TextSelectedBg},
         };
         if (ImGui::BeginTable("##ColorTable", 2, ImGuiTableFlags_Borders)) {
-            ImGui::TableSetupColumn("Name");
-            ImGui::TableSetupColumn("Color");
+            ImGui::TableSetupColumn(L("Name", "الاسم"));
+            ImGui::TableSetupColumn(L("Color", "اللون"));
             ImGui::TableHeadersRow();
             for (auto &k : kColors) {
                 if (filter[0] && !strstr(k.name, filter)) continue;
                 ImGui::TableNextRow();
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(k.name);
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(L(k.name, k.ar));
                 ImGui::TableNextColumn();
                 ImVec4 c = ImGui::GetStyle().Colors[k.col];
                 if (ImGui::ColorEdit4("##col", (float *)&c, ImGuiColorEditFlags_NoInputs))
@@ -1393,10 +1786,10 @@ static void DrawColorSettings()
             }
             ImGui::EndTable();
         }
-        if (ImGui::Button("Reset Colors")) {
+        if (ImGui::Button(L("Reset Colors", "استعادة الألوان"))) {
             ImGui::StyleColorsDark();
             NrthUI_ApplyTheme();
-            FeatureAction("Colors reset");
+            FeatureAction(L("Colors reset", "تمت استعادة الألوان"));
         }
         ImGui::TreePop();
     }
@@ -1407,9 +1800,9 @@ static void DrawConfigTab()
     if (!s_configsScanned) ScanConfigs();
     ImGui::Columns(2, "##cfgcols", false);
     ImGui::SetColumnWidth(0, 260);
-    ImGui::Text("Configs");
+    ImGui::Text("%s", L("Configs", "الإعدادات"));
     ImGui::BeginChild("##cfgitem", ImVec2(-1, -1), true);
-    if (s_configs.empty()) ImGui::TextDisabled("No configs found");
+    if (s_configs.empty()) ImGui::TextDisabled("%s", L("No configs found", "لا إعدادات"));
     for (int i = 0; i < (int)s_configs.size(); ++i) {
         if (ImGui::Selectable(s_configs[i].name.c_str(), s_cfgSel == i)) s_cfgSel = i;
     }
@@ -1417,55 +1810,57 @@ static void DrawConfigTab()
     ImGui::NextColumn();
 
     ImGui::BeginChild("##cfg_right", ImVec2(0, -1), true);
-    ImGui::InputText("Name##sa", s_cfgName, sizeof(s_cfgName));
-    if (ImGui::Button("Save")) {
+    ImGui::InputText(L("Name", "الاسم##sa"), s_cfgName, sizeof(s_cfgName));
+    if (ImGui::Button(L("Save", "حفظ"))) {
         std::string f = std::string(s_cfgName) + ".ovr";
         /* Writes both <name>.ovr ("OVRCFG") and C:\Overwack\loader_config.cfg */
         NrthConfig_SaveOvr(f.c_str(), NULL);
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Config saved: %s", f.c_str());
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Config saved", "تم حفظ الإعداد"), f.c_str());
         FeatureAction(msg);
         s_configsScanned = false;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Save As...")) {
+    if (ImGui::Button(L("Save As...", "حفظ باسم..."))) {
         s_cfgName[0] = 0;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load") && s_cfgSel >= 0) {
+    if (ImGui::Button(L("Load", "تحميل")) && s_cfgSel >= 0) {
         NrthConfig_Load(s_configs[s_cfgSel].name.c_str());
         NrthConfig_Save(NULL);
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Config loaded: %s", s_configs[s_cfgSel].name.c_str());
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Config loaded", "تم تحميل الإعداد"),
+                 s_configs[s_cfgSel].name.c_str());
         FeatureAction(msg);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Delete") && s_cfgSel >= 0) {
+    if (ImGui::Button(L("Delete", "حذف")) && s_cfgSel >= 0) {
         DeleteFileA(s_configs[s_cfgSel].name.c_str());
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Config deleted: %s", s_configs[s_cfgSel].name.c_str());
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s: %s", L("Config deleted", "تم حذف الإعداد"),
+                 s_configs[s_cfgSel].name.c_str());
         FeatureAction(msg);
         s_configsScanned = false;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Default")) {
+    if (ImGui::Button(L("Reset to Default", "استعادة الافتراضي"))) {
         g_cfg.menuKey   = NRTH_VK_INSERT;
         g_cfg.noSpoofer = 0;
         NrthConfig_Save(NULL);
-        FeatureAction("Reset to default style");
+        FeatureAction(L("Reset to default style", "تمت الاستعادة للوضع الافتراضي"));
     }
     ImGui::Separator();
-    ImGui::Checkbox("Watermark", &g_cfg.watermark);
+    ImGui::Checkbox(L("Watermark", "العلامة المائية"), &g_cfg.watermark);
     ImGui::SameLine();
-    ImGui::Checkbox("Notifications", &g_cfg.notifications);
+    ImGui::Checkbox(L("Notifications", "الإشعارات"), &g_cfg.notifications);
     ImGui::SameLine();
-    ImGui::Checkbox("Show Keybind's", &s_showKeybindWindow);
+    ImGui::Checkbox(L("Show Keybind's", "إظهار المفاتيح"), &s_showKeybindWindow);
     ImGui::Separator();
 
-    ImGui::Text("Menu Toggle Key");
+    ImGui::Text("%s", L("Menu Toggle Key", "زر فتح القائمة"));
     ImGui::SameLine();
     if (s_waitingForKey) {
-        ImGui::Button("Press...");
+        ImGui::Button(L("Press...", "اضغط..."));
         for (int k = 1; k < 256; ++k) {
             if (k == VK_LBUTTON || k == VK_RBUTTON) continue;
             if (GetAsyncKeyState(k) & 1) {
@@ -1475,25 +1870,25 @@ static void DrawConfigTab()
                 break;
             }
         }
-    } else if (ImGui::Button("Set")) {
+    } else if (ImGui::Button(L("Set", "تعيين"))) {
         s_waitingForKey = true;
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(current: %d / Insert=45)", g_cfg.menuKey);
 
     ImGui::Separator();
-    ImGui::Text("Keybind's");
+    ImGui::Text("%s", L("Keybind's", "المفاتيح المخصصة"));
     bool anyBind = false;
     for (int i = 0; i < (int)(sizeof(s_cheatFeatures) / sizeof(Feature)); ++i) {
         if (s_cheatFeatures[i].key > 0) {
             anyBind = true;
             ImGui::PushID(1000 + i);
-            ImGui::Text("%s -> key %d (%s)", s_cheatFeatures[i].label, s_cheatFeatures[i].key,
-                        s_cheatFeatures[i].mode ? "Toggle" : "Hold");
+            ImGui::Text("%s -> %d (%s)", FeatureTr(s_cheatFeatures[i].label), s_cheatFeatures[i].key,
+                        s_cheatFeatures[i].mode ? L("Toggle", "تبديل") : L("Hold", "ضغط مستمر"));
             ImGui::SameLine();
             if (ImGui::SmallButton("X")) {
                 s_cheatFeatures[i].key = 0;
-                FeatureAction((std::string("Bind cleared: ") + s_cheatFeatures[i].label).c_str());
+                FeatureAction(L("Bind cleared", "تم مسح الزر"));
             }
             ImGui::PopID();
         }
@@ -1502,22 +1897,22 @@ static void DrawConfigTab()
         if (s_vehicleFeatures[i].key > 0) {
             anyBind = true;
             ImGui::PushID(2000 + i);
-            ImGui::Text("%s -> key %d (%s)", s_vehicleFeatures[i].label, s_vehicleFeatures[i].key,
-                        s_vehicleFeatures[i].mode ? "Toggle" : "Hold");
+            ImGui::Text("%s -> %d (%s)", FeatureTr(s_vehicleFeatures[i].label), s_vehicleFeatures[i].key,
+                        s_vehicleFeatures[i].mode ? L("Toggle", "تبديل") : L("Hold", "ضغط مستمر"));
             ImGui::SameLine();
             if (ImGui::SmallButton("X")) {
                 s_vehicleFeatures[i].key = 0;
-                FeatureAction((std::string("Bind cleared: ") + s_vehicleFeatures[i].label).c_str());
+                FeatureAction(L("Bind cleared", "تم مسح الزر"));
             }
             ImGui::PopID();
         }
     }
-    if (!anyBind && s_binds.empty()) ImGui::TextDisabled("No binds");
+    if (!anyBind && s_binds.empty()) ImGui::TextDisabled("%s", L("No binds", "لا مفاتيح"));
     for (int i = 0; i < (int)s_binds.size(); ++i) {
         ImGui::Text("Bind: %s -> key %d", s_binds[i].action.c_str(), s_binds[i].key);
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) {
-            FeatureAction(("Bind cleared: " + s_binds[i].action).c_str());
+            FeatureAction(L("Bind cleared", "تم مسح الزر"));
             s_binds.erase(s_binds.begin() + i);
             break;
         }
@@ -1556,7 +1951,7 @@ static void PollHotkeys_10012250(void)
     pollFeatureArray(s_vehicleFeatures, (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)));
 }
 
-/* Matches DrawWatermark at VA 0x10012bc0 in NRTH.dll */
+/* Watermark — DARKANARCHY | FPS | Server (matches VA 0x10012bc0) */
 static void DrawWatermark_10012bc0(void)
 {
     if (!g_cfg.watermark) {
@@ -1564,35 +1959,52 @@ static void DrawWatermark_10012bc0(void)
     }
     ImGuiIO &io = ImGui::GetIO();
     float fps = io.Framerate > 0.0f ? io.Framerate : 60.0f;
-    char wmBuf[256];
-    snprintf(wmBuf, sizeof(wmBuf), "NORTH  |  FPS: %.0f  |  Server: %s", fps, s_status.c_str());
+
+    const char *statusAr = g_bArabic ? TrGet("", (s_status.find("connected") != std::string::npos)
+                                                 ? "متصل بالسيرفر" : "غير متصل") : NULL;
+    char wmBuf[320];
+    if (g_bArabic) {
+        snprintf(wmBuf, sizeof(wmBuf), "DARKANARCHY | FPS: %.0f | %s: %s", fps,
+                 TrGet("", "السيرفر"), statusAr);
+    } else {
+        snprintf(wmBuf, sizeof(wmBuf), "DARKANARCHY | FPS: %.0f | Server: %s", fps, s_status.c_str());
+    }
 
     ImVec2 textSz = ImGui::CalcTextSize(wmBuf);
-    float winW = textSz.x + 24.0f;
+    float winW = textSz.x + 34.0f;
     float posX = (io.DisplaySize.x > winW + 16.0f) ? (io.DisplaySize.x - winW - 14.0f) : 10.0f;
     ImGui::SetNextWindowPos(ImVec2(posX, 12.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.75f);
+    ImGui::SetNextWindowBgAlpha(0.80f);
     if (ImGui::Begin("##Watermark", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
-        ImGui::TextColored(kAccentHover, "NORTH");
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float cy = p.y + ImGui::GetTextLineHeight() * 0.5f;
+        DrawAnarchyLogo(dl, ImVec2(p.x + 10.0f, cy), 8.0f, 1.6f);
+        ImGui::SetCursorPosX(p.x + 24.0f);
+        ImGui::TextColored(kBloodHi, "DARKANARCHY");
         ImGui::SameLine();
-        ImGui::Text("|  FPS: %.0f  |  Server: %s", fps, s_status.c_str());
+        if (g_bArabic) {
+            ImGui::TextUnformatted(strstr(wmBuf, "| ") ? strstr(wmBuf, "| ") : wmBuf);
+        } else {
+            ImGui::Text("|  FPS: %.0f  |  Server: %s", fps, s_status.c_str());
+        }
     }
     ImGui::End();
 }
 
-/* Matches DrawKeybindList at VA 0x100130a0 in NRTH.dll */
+/* Floating keybind list (matches VA 0x100130a0) */
 static void DrawKeybindList_100130a0(void)
 {
     if (!s_showKeybindWindow) {
         return;
     }
     ImGui::SetNextWindowPos(ImVec2(14.0f, 60.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(230.0f, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.80f);
-    if (ImGui::Begin("Keybind's##floating", &s_showKeybindWindow,
+    ImGui::SetNextWindowSize(ImVec2(250.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin(L("Keybind's", "المفاتيح المخصصة##floating"), &s_showKeybindWindow,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings)) {
         bool any = false;
@@ -1600,10 +2012,11 @@ static void DrawKeybindList_100130a0(void)
             for (int i = 0; i < count; ++i) {
                 if (arr[i].key > 0) {
                     any = true;
-                    ImGui::Text("%s [%s]", arr[i].label, arr[i].mode ? "Toggle" : "Hold");
-                    ImGui::SameLine(175.0f);
+                    ImGui::Text("%s [%s]", FeatureTr(arr[i].label),
+                                arr[i].mode ? L("Toggle", "تبديل") : L("Hold", "ضغط مستمر"));
+                    ImGui::SameLine(190.0f);
                     if (arr[i].on) {
-                        ImGui::TextColored(kAccentHover, "ON");
+                        ImGui::TextColored(kBloodHi, "ON");
                     } else {
                         ImGui::TextDisabled("OFF");
                     }
@@ -1613,13 +2026,13 @@ static void DrawKeybindList_100130a0(void)
         listFeatureArray(s_cheatFeatures, (int)(sizeof(s_cheatFeatures) / sizeof(Feature)));
         listFeatureArray(s_vehicleFeatures, (int)(sizeof(s_vehicleFeatures) / sizeof(Feature)));
         if (!any) {
-            ImGui::TextDisabled("No active binds");
+            ImGui::TextDisabled("%s", L("No active binds", "لا مفاتيح مفعلة"));
         }
     }
     ImGui::End();
 }
 
-/* Matches DrawNotifications at VA 0x10016990 in NRTH.dll */
+/* Toast notifications (matches VA 0x10016990) */
 static void DrawNotifications_10016990(void)
 {
     if (!g_cfg.notifications || s_notifications.empty()) {
@@ -1633,20 +2046,27 @@ static void DrawNotifications_10016990(void)
         }
     }
     ImGuiIO &io = ImGui::GetIO();
-    float baseY = (io.DisplaySize.y > 100.0f ? io.DisplaySize.y : 720.0f) - 70.0f;
-    float baseX = (io.DisplaySize.x > 300.0f ? io.DisplaySize.x : 1280.0f) - 275.0f;
+    float baseY = (io.DisplaySize.y > 100.0f ? io.DisplaySize.y : 720.0f) - 76.0f;
+    float baseX = (io.DisplaySize.x > 300.0f ? io.DisplaySize.x : 1280.0f) - 290.0f;
     for (int i = 0; i < (int)s_notifications.size(); ++i) {
         char winId[32];
         snprintf(winId, sizeof(winId), "##toast_%d", i);
-        ImGui::SetNextWindowPos(ImVec2(baseX, baseY - i * 58.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(260.0f, 50.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.88f);
+        ImGui::SetNextWindowPos(ImVec2(baseX, baseY - i * 62.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(276.0f, 54.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.90f);
         if (ImGui::Begin(winId, nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
                          ImGuiWindowFlags_NoMove)) {
-            ImGui::TextColored(kAccentHover, "Notification");
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            DrawAnarchyLogo(dl, ImVec2(p.x + 12.0f, p.y + 16.0f), 9.0f, 1.6f);
+            ImGui::SetCursorPosX(p.x + 28.0f);
+            ImGui::TextColored(kBloodHi, "DARKANARCHY");
+            /* clip text to the toast width so long Arabic messages wrap safely */
+            ImGui::PushTextWrapPos(p.x + 262.0f);
             ImGui::TextUnformatted(s_notifications[i].text.c_str());
+            ImGui::PopTextWrapPos();
         }
         ImGui::End();
     }
@@ -1654,35 +2074,67 @@ static void DrawNotifications_10016990(void)
 
 void NrthUI_Build()
 {
-    ImGui::SetNextWindowSize(ImVec2(860, 560), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(880, 570), ImGuiCond_FirstUseEver);
     if (!s_menuOpen) return;
-    if (!ImGui::Begin("North Cheat", &s_menuOpen)) {
+    if (!ImGui::Begin("DARKANARCHY", &s_menuOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
     }
 
-    ImGui::TextColored(kAccentHover, "N O R T H");
-    ImGui::SameLine();
+    /* ---------------- Header: logo + brand + byline + language toggle --- */
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 hp = ImGui::GetCursorScreenPos();
+    float logoR = 22.0f;
+    float headerH = logoR * 2.0f + 8.0f;
+    ImVec2 headerMin = hp;
+    ImVec2 headerMax = ImVec2(hp.x + ImGui::GetContentRegionAvail().x, hp.y + headerH);
+    dl->AddRectFilled(headerMin, headerMax, IM_COL32(16, 14, 14, 200), 8.0f);
+    dl->AddRect(headerMin, headerMax, IM_COL32(90, 20, 20, 160), 8.0f);
+
+    DrawAnarchyLogo(dl, ImVec2(hp.x + 14.0f + logoR, hp.y + headerH * 0.5f), logoR, 2.4f);
+
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 14.0f + logoR * 2.0f + 14.0f, hp.y + 8.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, kBloodHi);
+    ImGui::Text("D A R K A N A R C H Y");
+    ImGui::PopStyleColor();
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 14.0f + logoR * 2.0f + 14.0f, hp.y + 34.0f));
+    ImGui::TextDisabled("by XRAOUF");
+
+    /* Language toggle (right side of header) */
+    float toggleW = 110.0f;
+    ImGui::SetCursorScreenPos(ImVec2(headerMax.x - toggleW - 12.0f, hp.y + (headerH - 26.0f) * 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Button, kBloodDim);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kBlood);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kBloodHi);
+    if (ImGui::Button(g_bArabic ? "English" : "العربية", ImVec2(toggleW, 26.0f))) {
+        NrthUI_SetLanguageArabic(!g_bArabic);
+    }
+    ImGui::PopStyleColor(3);
+
+    ImGui::SetCursorScreenPos(ImVec2(hp.x, hp.y + headerH + 8.0f));
     StatusLine();
     ImGui::Separator();
+    /* ---------------- End header ---------------------------------------- */
 
-    static const char *kTop[] = {"Scripts", "Dumper", "Cheat", "Vehicle", "Config"};
+    static const char *kTopEn[] = {"Scripts", "Dumper", "Cheat", "Vehicle", "Config"};
+    static const char *kTopAr[] = {"سكربتات", "ملفات", "غش", "مركبات", "إعدادات"};
     float w = (ImGui::GetContentRegionAvail().x - 4 * 8.f) / 5.f;
     for (int i = 0; i < 5; ++i) {
         char hid[32];
-        snprintf(hid, sizeof(hid), "nvx_top_%d", i);
-        if (TabButton(kTop[i], hid, s_topTab == i, ImVec2(w, 34))) s_topTab = i;
+        snprintf(hid, sizeof(hid), "nvx_top_%d", i); /* stable IDs across languages */
+        if (TabButton(L(kTopEn[i], kTopAr[i]), hid, s_topTab == i, ImVec2(w, 36))) s_topTab = i;
         if (i < 4) ImGui::SameLine();
     }
     ImGui::Spacing();
 
     if (s_topTab == 0) {
-        static const char *kSub[] = {"Editor", "Scripts", "Resources", "Events", "Events Table", "Packets"};
+        static const char *kSubEn[] = {"Editor", "Scripts", "Resources", "Events", "Events Table", "Packets"};
+        static const char *kSubAr[] = {"المحرر", "سكربتات", "المودات", "الأحداث", "جدول الأحداث", "الباكيتات"};
         float sw = (ImGui::GetContentRegionAvail().x - 5 * 6.f) / 6.f;
         for (int i = 0; i < 6; ++i) {
             char hid[32];
             snprintf(hid, sizeof(hid), "nvx_ssub_%d", i);
-            if (TabButton(kSub[i], hid, s_scriptsSub == i, ImVec2(sw, 26))) s_scriptsSub = i;
+            if (TabButton(L(kSubEn[i], kSubAr[i]), hid, s_scriptsSub == i, ImVec2(sw, 28))) s_scriptsSub = i;
             if (i < 5) ImGui::SameLine();
         }
         ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
@@ -1700,12 +2152,13 @@ void NrthUI_Build()
         DrawDumper();
         ImGui::EndChild();
     } else if (s_topTab == 2) {
-        static const char *kCSub[] = {"Player", "Other", "Markers"};
+        static const char *kCSubEn[] = {"Player", "Other", "Markers"};
+        static const char *kCSubAr[] = {"اللاعب", "أخرى", "العلامات"};
         float sw = (ImGui::GetContentRegionAvail().x - 2 * 6.f) / 3.f;
         for (int i = 0; i < 3; ++i) {
             char hid[32];
             snprintf(hid, sizeof(hid), "nvx_csub_%d", i);
-            if (TabButton(kCSub[i], hid, s_cheatSub == i, ImVec2(sw, 26))) s_cheatSub = i;
+            if (TabButton(L(kCSubEn[i], kCSubAr[i]), hid, s_cheatSub == i, ImVec2(sw, 28))) s_cheatSub = i;
             if (i < 2) ImGui::SameLine();
         }
         ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
@@ -1730,6 +2183,9 @@ void NrthUI_Build()
 
 extern "C" void NrthUI_RenderFrame(bool menuOpen)
 {
+    ImFont *font = (ImFont *)(g_bArabic ? g_pFontAr : g_pFontEn);
+    if (font) ImGui::PushFont(font);
+
     PollHotkeys_10012250();
     DrawWatermark_10012bc0();
     DrawKeybindList_100130a0();
@@ -1738,6 +2194,8 @@ extern "C" void NrthUI_RenderFrame(bool menuOpen)
         NrthUI_Build();
     }
     DrawNotifications_10016990();
+
+    if (font) ImGui::PopFont();
 }
 
 #else /* Headless / non-Win32 build for verification tests */
