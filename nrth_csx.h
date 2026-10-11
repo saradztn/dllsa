@@ -202,3 +202,30 @@ static uint32_t NrthCsx_SnapNewArtifacts(const NrthCsxSnapshot *a, const NrthCsx
     }
     return b->flags & ~a->flags;
 }
+
+/* ---- Live watchdog event evaluation (pure; thread feeds snapshots) ------ */
+#define NRTH_CSX_WATCH_IDENTITY 0x80000000u /* identity inputs rotated */
+
+typedef struct NrthCsxWatchEvent {
+    uint32_t seq;
+    uint32_t kindMask; /* NRTH_CSX_WATCH_IDENTITY | NRTH_CSX_F_* new bits */
+    uint32_t tickMs;
+} NrthCsxWatchEvent;
+
+/* returns 1 and fills *out when 'now' differs from 'prev' (tamper event) */
+static int NrthCsx_WatchEvaluate(const NrthCsxSnapshot *prev, const NrthCsxSnapshot *now,
+                                 NrthCsxWatchEvent *out)
+{
+    if (!prev || !now || !out) {
+        return 0;
+    }
+    const uint32_t newArt   = NrthCsx_SnapNewArtifacts(prev, now);
+    const int      idChanged = NrthCsx_SnapIdentityChanged(prev, now);
+    if (!idChanged && !newArt) {
+        return 0;
+    }
+    out->seq    = 0;
+    out->tickMs = 0;
+    out->kindMask = (idChanged ? NRTH_CSX_WATCH_IDENTITY : 0u) | newArt;
+    return 1;
+}

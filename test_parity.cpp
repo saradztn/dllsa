@@ -926,6 +926,29 @@ int main(void)
                   NrthCsx_SnapNewArtifacts(NULL, &b) == 0,
                   "csx-ab: helpers NULL-safe");
         }
+        /* 13f. watchdog event evaluation (pure core of the live guard) */
+        {
+            NrthCsxSnapshot a, b;
+            NrthCsxWatchEvent ev;
+            memset(&a, 0, sizeof(a));
+            memset(&b, 0, sizeof(b));
+            strncpy(a.machineGuid, "g", 2);
+            strncpy(b.machineGuid, "g", 2);
+            CHECK(NrthCsx_WatchEvaluate(&a, &b, &ev) == 0,
+                  "csx-wd: no event when nothing changed");
+            b.flags = NRTH_CSX_F_PROBE;
+            CHECK(NrthCsx_WatchEvaluate(&a, &b, &ev) == 1 &&
+                  ev.kindMask == NRTH_CSX_F_PROBE,
+                  "csx-wd: probe-drop-only event carries the artifact bit");
+            strncpy(b.machineGuid, "h", 2);
+            CHECK(NrthCsx_WatchEvaluate(&a, &b, &ev) == 1 &&
+                  (ev.kindMask & NRTH_CSX_WATCH_IDENTITY) &&
+                  (ev.kindMask & NRTH_CSX_F_PROBE),
+                  "csx-wd: identity rotation + artifact combine in one event mask");
+            CHECK(NrthCsx_WatchEvaluate(&a, &b, NULL) == 0 &&
+                  NrthCsx_WatchEvaluate(NULL, &b, &ev) == 0,
+                  "csx-wd: evaluator NULL-safe");
+        }
     }
 
     printf("---------------------------------------------------\n");

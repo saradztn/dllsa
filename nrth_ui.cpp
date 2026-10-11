@@ -2050,10 +2050,135 @@ static void DrawSessionTab()
 }
 
 /* ---------------------------------------------------------------------------
- * CSX AUDIT tab — read-only identity surface + artifact detection + dry-run
- * spoof simulator (evidence: analysis of CSX.exe sha256 68352063...; see
- * nrth_csx.h and analysis/csx_spoof_analysis.md)
+ * CSX AUDIT tab — read-only identity surface + artifact detection + A/B
+ * differential audit + LIVE TAMPER WATCHDOG (defensive: catches any spoofer
+ * — CSX or otherwise — rewriting identity keys on this machine, in real
+ * time). Evidence: analysis of CSX.exe sha256 68352063...; see nrth_csx.h
+ * and analysis/csx_full_re.md
  * ------------------------------------------------------------------------- */
+
+/* audit state shared by the UI, the A/B snapshots and the watchdog thread */
+static char           g_csxGuid[128]  = "(not scanned)";
+static char           g_csxPc[128]    = "(not scanned)";
+static char           g_csxUser[128]  = "(not scanned)";
+static unsigned long  g_csxVolSerial  = 0;
+static bool           g_csxCacheDir   = false;
+static bool           g_csxClSid2     = false;
+static int            g_csxMtaKeys    = -1;   /* -1 unknown until scan */
+static char           g_csxProbeHits[256] = "";
+static bool           g_csxModule     = false;
+
+static const char *g_csxMtaKeyNames[] = {
+    "SOFTWARE\\Multi Theft Auto: San Andreas All\\1.6",
+    "SOFTWARE\\Multi Theft Auto: San Andreas\\1.6",
+    "SOFTWARE\\Multi Theft Auto\\1.6",
+    "SOFTWARE\\Multi Theft Auto: Province All\\1.6",
+    "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas All\\1.6",
+    "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas\\1.6",
+    "SOFTWARE\\WOW6432Node\\Multi Theft Auto\\1.6",
+    "SOFTWARE\\WOW6432Node\\Multi Theft Auto: Province All\\1.6",
+};
+
+/* one full read-only audit pass (registry/files/modules — never writes) */
+static void CsxCaptureAudit(void)
+{
+    HKEY hk = NULL;
+    g_csxGuid[0] = '\0';
+    DWORD_API sz = sizeof(g_csxGuid);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, "SOFTWARE\\Microsoft\\Cryptography",
+                      0, KEY_READ_C, &hk) == 0 && hk) {
+        RegQueryValueExA(hk, "MachineGuid", NULL, NULL,
+                         (unsigned char *)g_csxGuid, &sz);
+        RegCloseKey(hk);
+    }
+    if (!g_csxGuid[0]) snprintf(g_csxGuid, sizeof(g_csxGuid), "(unreadable)");
+    sz = sizeof(g_csxPc);
+    if (!GetComputerNameA(g_csxPc, &sz) || !g_csxPc[0]) snprintf(g_csxPc, sizeof(g_csxPc), "(unreadable)");
+    sz = sizeof(g_csxUser);
+    if (!GetUserNameA(g_csxUser, &sz) || !g_csxUser[0]) snprintf(g_csxUser, sizeof(g_csxUser), "(unreadable)");
+    if (!GetVolumeInformationA(NULL, NULL, 0, &g_csxVolSerial, NULL, NULL, NULL, 0)) g_csxVolSerial = 0;
+    g_csxCacheDir = GetFileAttributesA("C:\\ProgramData\\MTA San Andreas All\\Common\\data\\cache")
+                    != INVALID_FILE_ATTRIBUTES;
+    g_csxClSid2 = RegOpenKeyExA(HKEY_LOCAL_MACHINE_C,
+                 "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CLSID2",
+                 0, KEY_READ_C, &hk) == 0;
+    g_csxMtaKeys = 0;
+    for (size_t i = 0; i < sizeof(g_csxMtaKeyNames) / sizeof(g_csxMtaKeyNames[0]); ++i) {
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, g_csxMtaKeyNames[i], 0, KEY_READ_C, &hk) == 0) {
+            ++g_csxMtaKeys;
+            RegCloseKey(hk);
+        }
+    }
+    g_csxModule = GetModuleHandleA("csxcheat.dll") != NULL;
+    g_csxProbeHits[0] = '\0';
+    static const char *kProbePaths[] = {
+        "C:\\Windows\\Temp\\csxprobe.exe",
+        "C:\\ProgramData\\csxprobe.exe",
+        "C:\\Users\\Public\\csxprobe.exe",
+    };
+    for (size_t i = 0; i < sizeof(kProbePaths) / sizeof(kProbePaths[0]); ++i) {
+        if (GetFileAttributesA(kProbePaths[i]) != INVALID_FILE_ATTRIBUTES) {
+            strncat(g_csxProbeHits, kProbePaths[i], sizeof(g_csxProbeHits) - strlen(g_csxProbeHits) - 2);
+            strncat(g_csxProbeHits, "  ", sizeof(g_csxProbeHits) - strlen(g_csxProbeHits) - 2);
+        }
+    }
+}
+
+static void CsxFillSnapshot(NrthCsxSnapshot *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    strncpy(out->machineGuid, g_csxGuid, sizeof(out->machineGuid) - 1);
+    out->volSerial = (uint32_t)g_csxVolSerial;
+    out->mtaKeys   = (int32_t)g_csxMtaKeys;
+    out->flags     = (g_csxClSid2    ? NRTH_CSX_F_CLSID2   : 0u) |
+                     (g_csxModule    ? NRTH_CSX_F_MODULE   : 0u) |
+                     (g_csxProbeHits[0] ? NRTH_CSX_F_PROBE : 0u) |
+                     (g_csxCacheDir  ? NRTH_CSX_F_CACHEDIR : 0u);
+}
+
+/* ---- LIVE TAMPER WATCHDOG (Windows): samples identity surface @3s ------- */
+#ifdef _WIN32
+static NrthCsxSnapshot   g_watchPrev, g_watchCur;
+static NrthCsxWatchEvent g_watchEvents[16];
+static volatile LONG     g_watchCount = 0;   /* total tamper events seen   */
+static volatile LONG     g_watchArmed = 0;   /* 0=priming baseline, 1=live */
+
+static void CsxWatchPoll(void)
+{
+    CsxCaptureAudit();
+    CsxFillSnapshot(&g_watchCur);
+    NrthCsxWatchEvent ev;
+    if (InterlockedCompareExchange(&g_watchArmed, 1, 1) == 1 &&
+        NrthCsx_WatchEvaluate(&g_watchPrev, &g_watchCur, &ev)) {
+        LONG idx = InterlockedIncrement((volatile LONG *)&g_watchCount) - 1;
+        ev.seq    = (uint32_t)idx;
+        ev.tickMs = (uint32_t)(GetTickCount64() & 0xFFFFFFFFu);
+        g_watchEvents[idx & 15] = ev;
+    }
+    g_watchPrev = g_watchCur;
+    InterlockedExchange(&g_watchArmed, 1);
+}
+
+static DWORD WINAPI CsxWatchThread(LPVOID)
+{
+    for (;;) {
+        Sleep(3000);
+        CsxWatchPoll();
+    }
+    return 0;
+}
+
+static void CsxWatchStart(void)
+{
+    static bool s_started = false;
+    if (s_started) return;
+    s_started = true;
+    HANDLE h = CreateThread(NULL, 0, CsxWatchThread, NULL, 0, NULL);
+    if (h) CloseHandle(h);
+}
+#endif /* _WIN32 */
+
 static void DrawCsxTab()
 {
     const ImVec4 kPink  = ImVec4(0.96f, 0.30f, 0.55f, 1.0f);
@@ -2062,149 +2187,107 @@ static void DrawCsxTab()
 
     ImGui::TextColored(kPink, "%s", TR("CSX AUDIT — spoofer report lab", "تدقيق CSX — مختبر بلاغ spoofer"));
     ImGui::TextDisabled("%s",
-        TR("Read-only surface audit + artifact detection for CSX.exe (the reported"
+        TR("Read-only surface audit + live tamper watchdog for CSX.exe (the reported"
            " spoofer). This DLL never writes MachineGuid/MTA serials: a live spoofer"
-           " is ban evasion and is not included; the simulator is display-only.",
-           "تدقيق قراءة فقط لسطح الهوية وكشف آثار CSX.exe (الـ spoofer المُبلّغ عنه)."
+           " is ban evasion and is not included; the watchdog DEFENDS this machine"
+           " against any spoofer instead.",
+           "تدقيق قراءة فقط + حارس عبث حي لـ CSX.exe (الـ spoofer المُبلّغ عنه)."
            " هذه الـ DLL لا تعدل MachineGuid ولا سيريالات MTA: الـ spoofer الحي تهرب"
-           " من حظر وغير مضمّن؛ والمحاكي للعرض فقط."));
+           " من حظر وغير مضمّن؛ والحارس يدافع عن هذا الجهاز ضد أي spoofer بدلًا من ذلك."));
     ImGui::Spacing();
 
-    /* ---- cached local audit state (refreshed by Scan) ------------------- */
-    static char  s_guid[128]  = "(not scanned)";
-    static char  s_pc[128]    = "(not scanned)";
-    static char  s_user[128]  = "(not scanned)";
-    static unsigned long s_volSerial = 0;
-    static bool  s_cacheDir   = false;
-    static bool  s_clsid2     = false;
-    static int   s_mtaKeys    = -1;   /* -1 unknown until scan */
-    static char  s_probeHits[256] = "";
-    static bool  s_csxModule  = false;
-    static char  s_simSample[64] = "";
-
-    /* A/B differential snapshots (prove what a real spoofer changed) */
-    static NrthCsxSnapshot s_snapA, s_snapB;
-    static bool s_hasA = false, s_hasB = false;
-
-    static const char *kMtaKeys[] = {
-        "SOFTWARE\\Multi Theft Auto: San Andreas All\\1.6",
-        "SOFTWARE\\Multi Theft Auto: San Andreas\\1.6",
-        "SOFTWARE\\Multi Theft Auto\\1.6",
-        "SOFTWARE\\Multi Theft Auto: Province All\\1.6",
-        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas All\\1.6",
-        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas\\1.6",
-        "SOFTWARE\\WOW6432Node\\Multi Theft Auto\\1.6",
-        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: Province All\\1.6",
-    };
-
-    auto ScanNow = [&]() {
-        HKEY hk = NULL;
-        s_guid[0] = '\0';
-        DWORD_API sz = sizeof(s_guid);
-        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, "SOFTWARE\\Microsoft\\Cryptography",
-                          0, KEY_READ_C, &hk) == 0 && hk) {
-            RegQueryValueExA(hk, "MachineGuid", NULL, NULL,
-                             (unsigned char *)s_guid, &sz);
-            RegCloseKey(hk);
-        }
-        if (!s_guid[0]) snprintf(s_guid, sizeof(s_guid), "(unreadable)");
-        sz = sizeof(s_pc);
-        if (!GetComputerNameA(s_pc, &sz) || !s_pc[0]) snprintf(s_pc, sizeof(s_pc), "(unreadable)");
-        sz = sizeof(s_user);
-        if (!GetUserNameA(s_user, &sz) || !s_user[0]) snprintf(s_user, sizeof(s_user), "(unreadable)");
-        if (!GetVolumeInformationA(NULL, NULL, 0, &s_volSerial, NULL, NULL, NULL, 0)) s_volSerial = 0;
-        s_cacheDir = GetFileAttributesA("C:\\ProgramData\\MTA San Andreas All\\Common\\data\\cache")
-                     != INVALID_FILE_ATTRIBUTES;
-        s_clsid2 = RegOpenKeyExA(HKEY_LOCAL_MACHINE_C,
-                     "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CLSID2",
-                     0, KEY_READ_C, &hk) == 0;
-        s_mtaKeys = 0;
-        for (size_t i = 0; i < sizeof(kMtaKeys) / sizeof(kMtaKeys[0]); ++i) {
-            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, kMtaKeys[i], 0, KEY_READ_C, &hk) == 0) {
-                ++s_mtaKeys;
-                RegCloseKey(hk);
-            }
-        }
-        /* CSX artifacts */
-        s_csxModule = GetModuleHandleA("csxcheat.dll") != NULL;
-        s_probeHits[0] = '\0';
-        static const char *kProbePaths[] = {
-            "C:\\Windows\\Temp\\csxprobe.exe",
-            "C:\\ProgramData\\csxprobe.exe",
-            "C:\\Users\\Public\\csxprobe.exe",
-        };
-        for (size_t i = 0; i < sizeof(kProbePaths) / sizeof(kProbePaths[0]); ++i) {
-            if (GetFileAttributesA(kProbePaths[i]) != INVALID_FILE_ATTRIBUTES) {
-                strncat(s_probeHits, kProbePaths[i], sizeof(s_probeHits) - strlen(s_probeHits) - 2);
-                strncat(s_probeHits, "  ", sizeof(s_probeHits) - strlen(s_probeHits) - 2);
-            }
-        }
-        FeatureAction(TR("CSX audit scan complete", "اكتمل فحص تدقيق CSX"));
-    };
     static bool s_scanned = false;
     if (!s_scanned) {
         s_scanned = true;
-        ScanNow();
-        NrthCsx_SimulateSpoofId(s_guid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
+        CsxCaptureAudit();
     }
-    auto CaptureSnapshot = [&](NrthCsxSnapshot &out) {
-        ScanNow();
-        memset(&out, 0, sizeof(out));
-        strncpy(out.machineGuid, s_guid, sizeof(out.machineGuid) - 1);
-        out.volSerial = (uint32_t)s_volSerial;
-        out.mtaKeys   = (int32_t)s_mtaKeys;
-        out.flags     = (s_clsid2    ? NRTH_CSX_F_CLSID2   : 0u) |
-                        (s_csxModule ? NRTH_CSX_F_MODULE   : 0u) |
-                        (s_probeHits[0] ? NRTH_CSX_F_PROBE : 0u) |
-                        (s_cacheDir  ? NRTH_CSX_F_CACHEDIR : 0u);
-    };
+    static char s_simSample[64] = "";
+    if (!s_simSample[0]) {
+        NrthCsx_SimulateSpoofId(g_csxGuid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
+    }
 
     /* ---- Panel 1: identity surface (read-only) -------------------------- */
     if (ImGui::CollapsingHeader(TR("Identity Surface (read-only)##csx_id", "سطح الهوية (قراءة فقط)##csx_id"),
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextDisabled("%s: %s", TR("MachineGuid (Cryptography)", "MachineGuid (Cryptography)"), s_guid);
-        ImGui::TextDisabled("%s: %s", TR("Computer name", "اسم الحاسوب"), s_pc);
-        ImGui::TextDisabled("%s: %s", TR("User name", "اسم المستخدم"), s_user);
-        ImGui::TextDisabled("%s: %08X", TR("System volume serial", "سيريال وحدة النظام"), s_volSerial);
-        ImGui::TextDisabled("MTA cache dir: %s", s_cacheDir ? "present" : "absent");
-        ImGui::TextDisabled("%s: %d/8", TR("MTA identity keys", "مفاتيح هوية MTA"), s_mtaKeys);
-        ImGui::TextDisabled("Explorer\\CLSID2 (CSX state key): %s", s_clsid2 ? "PRESENT" : "absent");
+        ImGui::TextDisabled("%s: %s", TR("MachineGuid (Cryptography)", "MachineGuid (Cryptography)"), g_csxGuid);
+        ImGui::TextDisabled("%s: %s", TR("Computer name", "اسم الحاسوب"), g_csxPc);
+        ImGui::TextDisabled("%s: %s", TR("User name", "اسم المستخدم"), g_csxUser);
+        ImGui::TextDisabled("%s: %08lX", TR("System volume serial", "سيريال وحدة النظام"), g_csxVolSerial);
+        ImGui::TextDisabled("MTA cache dir: %s", g_csxCacheDir ? "present" : "absent");
+        ImGui::TextDisabled("%s: %d/8", TR("MTA identity keys", "مفاتيح هوية MTA"), g_csxMtaKeys);
+        ImGui::TextDisabled("Explorer\\CLSID2 (CSX state key): %s", g_csxClSid2 ? "PRESENT" : "absent");
         ImGui::SameLine();
-        if (ImGui::SmallButton(TR("Rescan##csx_rs", "فحص جديد##csx_rs"))) ScanNow();
+        if (ImGui::SmallButton(TR("Rescan##csx_rs", "فحص جديد##csx_rs"))) {
+            CsxCaptureAudit();
+            FeatureAction(TR("CSX audit scan complete", "اكتمل فحص تدقيق CSX"));
+        }
     }
 
-    /* ---- Panel 2: artifact detection ------------------------------------ */
+    /* ---- Panel 2: live tamper watchdog ----------------------------------- */
+    if (ImGui::CollapsingHeader(TR("Live Tamper Watchdog##csx_wd", "الحارس الحي ضد العبث##csx_wd"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("%s",
+            TR("Samples MachineGuid / volume serial / MTA keys / CSX artifacts every"
+               " 3 seconds and alerts the moment ANY process tampers with them."
+               " This protects the machine from CSX-like tools without running them.",
+               "يفحص MachineGuid وسيريال الوحدة ومفاتيح MTA وآثار CSX كل 3 ثوانٍ"
+               " وينبض فور عبث أي عملية بها. يحمي الجهاز من أدوات شبيهة بـ CSX"
+               " دون تشغيلها أصلًا."));
+#ifdef _WIN32
+        ImGui::TextColored(kGreen, "%s", TR("Status: MONITORING (3s interval)", "الحالة: مراقبة (كل 3 ثوانٍ)"));
+        const LONG seen = g_watchCount;
+        ImGui::TextDisabled("%s: %d", TR("Tamper events", "أحداث العبث"), (int)seen);
+        if (seen > 0) {
+            const LONG from = (seen > 8) ? seen - 8 : 0;
+            for (LONG i = seen - 1; i >= from; --i) {
+                const NrthCsxWatchEvent &e = g_watchEvents[i & 15];
+                std::string line = "#" + std::to_string(e.seq) + ": ";
+                if (e.kindMask & NRTH_CSX_WATCH_IDENTITY) line += TR("IDENTITY CHANGED ", "تغيّرت الهوية ");
+                if (e.kindMask & NRTH_CSX_F_CLSID2)       line += "+CLSID2 ";
+                if (e.kindMask & NRTH_CSX_F_MODULE)       line += "+csxcheat.dll ";
+                if (e.kindMask & NRTH_CSX_F_PROBE)        line += "+csxprobe.exe ";
+                ImGui::TextColored(kRed, "%s", line.c_str());
+            }
+        }
+#else
+        ImGui::TextDisabled("%s",
+            TR("Watchdog thread runs in the in-game DLL (Windows); this headless"
+               " build shows the baseline audit only.",
+               "خيط الحارس يعمل داخل DLL اللعبة (Windows)؛ هذه النسخة التجريبية"
+               " تعرض التدقيق الأساسي فقط."));
+#endif
+    }
+
+    /* ---- Panel 3: artifact detector + A/B differential audit ------------ */
     if (ImGui::CollapsingHeader(TR("CSX Artifact Detector##csx_det", "كاشف آثار CSX##csx_det"),
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-        const bool probeFound = s_probeHits[0] != '\0';
-        const bool detected = s_csxModule || probeFound || s_clsid2;
+        const bool probeFound = g_csxProbeHits[0] != '\0';
+        const bool detected = g_csxModule || probeFound || g_csxClSid2;
         ImGui::TextColored(detected ? kRed : kGreen, "%s",
             detected ? TR("VERDICT: CSX artifacts DETECTED", "الحكم: وُجدت آثار CSX")
                      : TR("VERDICT: clean (no CSX artifacts)", "الحكم: نظيف (لا آثار CSX)"));
-        ImGui::TextDisabled("csxcheat.dll %s", s_csxModule
+        ImGui::TextDisabled("csxcheat.dll %s", g_csxModule
             ? TR("LOADED IN THIS PROCESS", "محمّلة في هذه العملية")
             : TR("not loaded", "غير محمّلة"));
-        ImGui::TextDisabled("csxprobe.exe: %s", probeFound ? s_probeHits
+        ImGui::TextDisabled("csxprobe.exe: %s", probeFound ? g_csxProbeHits
             : TR("not found", "غير موجود"));
-        ImGui::TextDisabled("%s",
-            TR("Use this with a real CSX client in the lab: run CSX, rescan, and the"
-               " delta (CLSID2 key, csxprobe.exe drop, csxcheat.dll module) verifies"
-               " the report.", "استخدمه مع عميل CSX حقيقي في المعمل: شغّل CSX ثم أعد"
-               " الفحص، والفارق (مفتاح CLSID2، إسقاط csxprobe.exe، وحدة csxcheat.dll)"
-               " يثبت صحة البلاغ."));
-        ImGui::Separator();
 
+        ImGui::Separator();
         /* ---- A/B differential audit: snapshot before / snapshot after ---- */
+        static NrthCsxSnapshot s_snapA, s_snapB;
+        static bool s_hasA = false, s_hasB = false;
         if (ImGui::Button(TR("Snapshot BEFORE (A)##csx_sa", "لقطة قبل (A)##csx_sa"),
                           ImVec2(200, 28))) {
-            CaptureSnapshot(s_snapA);
+            CsxCaptureAudit();
+            CsxFillSnapshot(&s_snapA);
             s_hasA = true;
             FeatureAction(TR("Snapshot A captured", "التُقطت اللقطة A"));
         }
         ImGui::SameLine();
         if (ImGui::Button(TR("Snapshot AFTER (B)##csx_sb", "لقطة بعد (B)##csx_sb"),
                           ImVec2(200, 28))) {
-            CaptureSnapshot(s_snapB);
+            CsxCaptureAudit();
+            CsxFillSnapshot(&s_snapB);
             s_hasB = true;
             FeatureAction(TR("Snapshot B captured", "التُقطت اللقطة B"));
         }
@@ -2240,18 +2323,18 @@ static void DrawCsxTab()
         }
     }
 
-    /* ---- Panel 3: dry-run spoof simulator (display only) ---------------- */
+    /* ---- Panel 4: dry-run spoof simulator (display only) ---------------- */
     if (ImGui::CollapsingHeader(TR("Spoof Simulator (dry-run display)##csx_sim", "محاكي التزوير (عرض جاف)##csx_sim"),
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         static char json[512];
         char vol[16];
-        snprintf(vol, sizeof(vol), "%08X", s_volSerial);
-        NrthCsx_BuildFingerprintJson(s_simSample, s_pc, s_user, vol, json, sizeof(json));
+        snprintf(vol, sizeof(vol), "%08lX", g_csxVolSerial);
+        NrthCsx_BuildFingerprintJson(s_simSample, g_csxPc, g_csxUser, vol, json, sizeof(json));
         ImGui::TextDisabled("LOCAL (read-only):");
         ImGui::TextWrapped("%s", json);
         if (ImGui::Button(TR("Regenerate simulated identity##csx_rg", "توليد هوية محاكاة جديدة##csx_rg"),
                           ImVec2(240, 30))) {
-            NrthCsx_SimulateSpoofId(s_guid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
+            NrthCsx_SimulateSpoofId(g_csxGuid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
         }
         ImGui::SameLine();
         ImGui::TextColored(kPink, "SIM: %s", s_simSample);
@@ -2822,6 +2905,24 @@ void NrthUI_Build()
 
 extern "C" void NrthUI_RenderFrame(bool menuOpen)
 {
+#ifdef _WIN32
+    /* CSX live tamper watchdog: start once, then toast any new events */
+    CsxWatchStart();
+    {
+        static LONG s_watchSeen = 0;
+        const LONG cnt = g_watchCount;
+        if (cnt != s_watchSeen) {
+            for (LONG i = s_watchSeen; i < cnt; ++i) {
+                const NrthCsxWatchEvent &e = g_watchEvents[i & 15];
+                char msg[128];
+                snprintf(msg, sizeof(msg), "CSX WATCHDOG #%u: mask %08X - identity/artifact tampered!",
+                         (unsigned)e.seq, (unsigned)e.kindMask);
+                AddNotification_10002cd0(msg);
+            }
+            s_watchSeen = cnt;
+        }
+    }
+#endif
     PollHotkeys_10012250();
     DrawWatermark_10012bc0();
     DrawKeybindList_100130a0();

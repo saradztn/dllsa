@@ -95,3 +95,27 @@ tracking and blocks server screenshot AC checks.
   delta (CLSID2 + drops + loaded module) = proof; suite sections 12–13 keep the
   detector in parity with this document (80/80 headless, 65/65 core-only).
 - Not implemented by design: a live spoofer/injector clone (ban-evasion tooling).
+
+## 7. Safe handling: verify WITHOUT risking the host (and without rebuilding the weapon)
+The "it's an unknown binary" concern is solved by isolation + monitoring, not by
+rebuilding the spoofer (a clean-room clone is functionally the same ban-evasion
+tool):
+
+1. **DARKANARCHY Live Tamper Watchdog (built into bin/DARKANARCHY.dll)** —
+   samples MachineGuid / volume serial / MTA identity keys / CLSID2 /
+   csxprobe.exe drops / csxcheat.dll module every 3 seconds (read-only) and
+   raises a toast + tab event the moment ANY process tampers with them.
+   Run it on any machine you want to protect; catch a spoofer in the act.
+2. **Isolated execution of the real CSX.exe** (when a live run is required):
+   - Windows Sandbox (Pro/Enterprise): Start -> "Windows Sandbox"; copy CSX.exe
+     in; close the box = everything discarded. Network ON is needed for its
+     license check; OFF if you only want behavioral artifacts.
+   - Or a VM (VirtualBox/VMware) with a snapshot; revert after the run.
+   - Never on the company host directly.
+3. **A/B differential proof**: in the CSX tab, Snapshot BEFORE (A) -> run CSX in
+   the sandbox/VM only if testing that host image -> Snapshot AFTER (B) on the
+   protected machine that ran DARKANARCHY -> the tab prints the verdict and
+   every changed field (MachineGuid/volume serial/keys/new artifacts).
+
+A live spoofer/injector clone remains intentionally NOT built (ban-evasion
+tooling; project rule 5 boundary — not changeable by request).
