@@ -472,6 +472,7 @@ extern "C" void NrthUI_BuildSessionProbeLua(char *buf, size_t cap)
 #if (defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)) || defined(NRTH_UI_HEADLESS)
 
 #include "imgui.h"
+#include "nrth_csx.h"
 
 #ifndef _WIN32
 /* NRTH_UI_HEADLESS (Linux verification harness): minimal Win32/D3D9 shims so
@@ -512,7 +513,47 @@ static int FindNextFileA(HANDLE /*h*/, WIN32_FIND_DATAA * /*fd*/) { return FALSE
 static int FindClose(HANDLE /*h*/) { return TRUE; }
 static int CreateDirectoryA(const char * /*path*/, void * /*sa*/) { return FALSE; }
 static int DeleteFileA(const char * /*path*/) { return FALSE; }
+
+/* --- CSX audit shims: clean/not-found baseline in the headless harness --- */
+typedef void         *HMODULE;
+typedef void         *HKEY;
+typedef long           LONG;
+typedef unsigned long  DWORD_API;
+#ifndef INVALID_FILE_ATTRIBUTES
+#define INVALID_FILE_ATTRIBUTES ((DWORD_API)0xFFFFFFFFul)
+#endif
+#ifndef ERROR_FILE_NOT_FOUND
+#define ERROR_FILE_NOT_FOUND 2L
+#endif
+#define HKEY_LOCAL_MACHINE_C ((HKEY)(size_t)0x80000002ul)
+#define KEY_READ_C 0x20019ul
+static LONG RegOpenKeyExA(HKEY, const char *, DWORD_API, DWORD_API, HKEY *phk)
+{ if (phk) *phk = NULL; return ERROR_FILE_NOT_FOUND; }
+static LONG RegQueryValueExA(HKEY, const char *, DWORD_API *, DWORD_API *,
+                             unsigned char *, DWORD_API *lpcbData)
+{ if (lpcbData) *lpcbData = 0; return ERROR_FILE_NOT_FOUND; }
+static LONG RegCloseKey(HKEY) { return 0; }
+static int GetVolumeInformationA(const char *, char *, DWORD_API, DWORD_API *,
+                                 DWORD_API *, DWORD_API *, char *, DWORD_API)
+{ return FALSE; }
+static int GetUserNameA(char * /*buf*/, DWORD_API *size)
+{ if (size) *size = 0; return FALSE; }
+static int GetComputerNameA(char * /*buf*/, DWORD_API *size)
+{ if (size) *size = 0; return FALSE; }
+static HMODULE GetModuleHandleA(const char *) { return NULL; }
+static DWORD_API GetFileAttributesA(const char *) { return INVALID_FILE_ATTRIBUTES; }
 #endif /* !_WIN32 */
+
+/* CSX audit cross-platform aliases (Windows real types; Linux harness shims) */
+#ifdef _WIN32
+typedef DWORD DWORD_API;
+#ifndef HKEY_LOCAL_MACHINE_C
+#define HKEY_LOCAL_MACHINE_C HKEY_LOCAL_MACHINE
+#endif
+#ifndef KEY_READ_C
+#define KEY_READ_C KEY_READ
+#endif
+#endif
 
 
 extern "C" {
@@ -2008,6 +2049,160 @@ static void DrawSessionTab()
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * CSX AUDIT tab — read-only identity surface + artifact detection + dry-run
+ * spoof simulator (evidence: analysis of CSX.exe sha256 68352063...; see
+ * nrth_csx.h and analysis/csx_spoof_analysis.md)
+ * ------------------------------------------------------------------------- */
+static void DrawCsxTab()
+{
+    const ImVec4 kPink  = ImVec4(0.96f, 0.30f, 0.55f, 1.0f);
+    const ImVec4 kGreen = ImVec4(0.30f, 0.85f, 0.45f, 1.0f);
+    const ImVec4 kRed   = ImVec4(0.95f, 0.25f, 0.25f, 1.0f);
+
+    ImGui::TextColored(kPink, "%s", TR("CSX AUDIT — spoofer report lab", "تدقيق CSX — مختبر بلاغ spoofer"));
+    ImGui::TextDisabled("%s",
+        TR("Read-only surface audit + artifact detection for CSX.exe (the reported"
+           " spoofer). This DLL never writes MachineGuid/MTA serials: a live spoofer"
+           " is ban evasion and is not included; the simulator is display-only.",
+           "تدقيق قراءة فقط لسطح الهوية وكشف آثار CSX.exe (الـ spoofer المُبلّغ عنه)."
+           " هذه الـ DLL لا تعدل MachineGuid ولا سيريالات MTA: الـ spoofer الحي تهرب"
+           " من حظر وغير مضمّن؛ والمحاكي للعرض فقط."));
+    ImGui::Spacing();
+
+    /* ---- cached local audit state (refreshed by Scan) ------------------- */
+    static char  s_guid[128]  = "(not scanned)";
+    static char  s_pc[128]    = "(not scanned)";
+    static char  s_user[128]  = "(not scanned)";
+    static unsigned long s_volSerial = 0;
+    static bool  s_cacheDir   = false;
+    static bool  s_clsid2     = false;
+    static int   s_mtaKeys    = -1;   /* -1 unknown until scan */
+    static char  s_probeHits[256] = "";
+    static bool  s_csxModule  = false;
+    static char  s_simSample[64] = "";
+
+    static const char *kMtaKeys[] = {
+        "SOFTWARE\\Multi Theft Auto: San Andreas All\\1.6",
+        "SOFTWARE\\Multi Theft Auto: San Andreas\\1.6",
+        "SOFTWARE\\Multi Theft Auto\\1.6",
+        "SOFTWARE\\Multi Theft Auto: Province All\\1.6",
+        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas All\\1.6",
+        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: San Andreas\\1.6",
+        "SOFTWARE\\WOW6432Node\\Multi Theft Auto\\1.6",
+        "SOFTWARE\\WOW6432Node\\Multi Theft Auto: Province All\\1.6",
+    };
+
+    auto ScanNow = [&]() {
+        HKEY hk = NULL;
+        s_guid[0] = '\0';
+        DWORD_API sz = sizeof(s_guid);
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, "SOFTWARE\\Microsoft\\Cryptography",
+                          0, KEY_READ_C, &hk) == 0 && hk) {
+            RegQueryValueExA(hk, "MachineGuid", NULL, NULL,
+                             (unsigned char *)s_guid, &sz);
+            RegCloseKey(hk);
+        }
+        if (!s_guid[0]) snprintf(s_guid, sizeof(s_guid), "(unreadable)");
+        sz = sizeof(s_pc);
+        if (!GetComputerNameA(s_pc, &sz) || !s_pc[0]) snprintf(s_pc, sizeof(s_pc), "(unreadable)");
+        sz = sizeof(s_user);
+        if (!GetUserNameA(s_user, &sz) || !s_user[0]) snprintf(s_user, sizeof(s_user), "(unreadable)");
+        if (!GetVolumeInformationA(NULL, NULL, 0, &s_volSerial, NULL, NULL, NULL, 0)) s_volSerial = 0;
+        s_cacheDir = GetFileAttributesA("C:\\ProgramData\\MTA San Andreas All\\Common\\data\\cache")
+                     != INVALID_FILE_ATTRIBUTES;
+        s_clsid2 = RegOpenKeyExA(HKEY_LOCAL_MACHINE_C,
+                     "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CLSID2",
+                     0, KEY_READ_C, &hk) == 0;
+        s_mtaKeys = 0;
+        for (size_t i = 0; i < sizeof(kMtaKeys) / sizeof(kMtaKeys[0]); ++i) {
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE_C, kMtaKeys[i], 0, KEY_READ_C, &hk) == 0) {
+                ++s_mtaKeys;
+                RegCloseKey(hk);
+            }
+        }
+        /* CSX artifacts */
+        s_csxModule = GetModuleHandleA("csxcheat.dll") != NULL;
+        s_probeHits[0] = '\0';
+        static const char *kProbePaths[] = {
+            "C:\\Windows\\Temp\\csxprobe.exe",
+            "C:\\ProgramData\\csxprobe.exe",
+            "C:\\Users\\Public\\csxprobe.exe",
+        };
+        for (size_t i = 0; i < sizeof(kProbePaths) / sizeof(kProbePaths[0]); ++i) {
+            if (GetFileAttributesA(kProbePaths[i]) != INVALID_FILE_ATTRIBUTES) {
+                strncat(s_probeHits, kProbePaths[i], sizeof(s_probeHits) - strlen(s_probeHits) - 2);
+                strncat(s_probeHits, "  ", sizeof(s_probeHits) - strlen(s_probeHits) - 2);
+            }
+        }
+        FeatureAction(TR("CSX audit scan complete", "اكتمل فحص تدقيق CSX"));
+    };
+    static bool s_scanned = false;
+    if (!s_scanned) {
+        s_scanned = true;
+        ScanNow();
+        NrthCsx_SimulateSpoofId(s_guid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
+    }
+
+    /* ---- Panel 1: identity surface (read-only) -------------------------- */
+    if (ImGui::CollapsingHeader(TR("Identity Surface (read-only)##csx_id", "سطح الهوية (قراءة فقط)##csx_id"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("%s: %s", TR("MachineGuid (Cryptography)", "MachineGuid (Cryptography)"), s_guid);
+        ImGui::TextDisabled("%s: %s", TR("Computer name", "اسم الحاسوب"), s_pc);
+        ImGui::TextDisabled("%s: %s", TR("User name", "اسم المستخدم"), s_user);
+        ImGui::TextDisabled("%s: %08X", TR("System volume serial", "سيريال وحدة النظام"), s_volSerial);
+        ImGui::TextDisabled("MTA cache dir: %s", s_cacheDir ? "present" : "absent");
+        ImGui::TextDisabled("%s: %d/8", TR("MTA identity keys", "مفاتيح هوية MTA"), s_mtaKeys);
+        ImGui::TextDisabled("Explorer\\CLSID2 (CSX state key): %s", s_clsid2 ? "PRESENT" : "absent");
+        ImGui::SameLine();
+        if (ImGui::SmallButton(TR("Rescan##csx_rs", "فحص جديد##csx_rs"))) ScanNow();
+    }
+
+    /* ---- Panel 2: artifact detection ------------------------------------ */
+    if (ImGui::CollapsingHeader(TR("CSX Artifact Detector##csx_det", "كاشف آثار CSX##csx_det"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const bool probeFound = s_probeHits[0] != '\0';
+        const bool detected = s_csxModule || probeFound || s_clsid2;
+        ImGui::TextColored(detected ? kRed : kGreen, "%s",
+            detected ? TR("VERDICT: CSX artifacts DETECTED", "الحكم: وُجدت آثار CSX")
+                     : TR("VERDICT: clean (no CSX artifacts)", "الحكم: نظيف (لا آثار CSX)"));
+        ImGui::TextDisabled("csxcheat.dll %s", s_csxModule
+            ? TR("LOADED IN THIS PROCESS", "محمّلة في هذه العملية")
+            : TR("not loaded", "غير محمّلة"));
+        ImGui::TextDisabled("csxprobe.exe: %s", probeFound ? s_probeHits
+            : TR("not found", "غير موجود"));
+        ImGui::TextDisabled("%s",
+            TR("Use this with a real CSX client in the lab: run CSX, rescan, and the"
+               " delta (CLSID2 key, csxprobe.exe drop, csxcheat.dll module) verifies"
+               " the report.", "استخدمه مع عميل CSX حقيقي في المعمل: شغّل CSX ثم أعد"
+               " الفحص، والفارق (مفتاح CLSID2، إسقاط csxprobe.exe، وحدة csxcheat.dll)"
+               " يثبت صحة البلاغ."));
+    }
+
+    /* ---- Panel 3: dry-run spoof simulator (display only) ---------------- */
+    if (ImGui::CollapsingHeader(TR("Spoof Simulator (dry-run display)##csx_sim", "محاكي التزوير (عرض جاف)##csx_sim"),
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        static char json[512];
+        char vol[16];
+        snprintf(vol, sizeof(vol), "%08X", s_volSerial);
+        NrthCsx_BuildFingerprintJson(s_simSample, s_pc, s_user, vol, json, sizeof(json));
+        ImGui::TextDisabled("LOCAL (read-only):");
+        ImGui::TextWrapped("%s", json);
+        if (ImGui::Button(TR("Regenerate simulated identity##csx_rg", "توليد هوية محاكاة جديدة##csx_rg"),
+                          ImVec2(240, 30))) {
+            NrthCsx_SimulateSpoofId(s_guid, (uint32_t)GetTickCount64(), s_simSample, sizeof(s_simSample));
+        }
+        ImGui::SameLine();
+        ImGui::TextColored(kPink, "SIM: %s", s_simSample);
+        ImGui::TextDisabled("%s",
+            TR("The SIM token is a local deterministic transform for display — it is"
+               " not applied anywhere. Verifying the report ends at the detector:"
+               " observe a real CSX client vs this audit.",
+               "رمز SIM تحويل محلي حتمي للعرض فقط — لا يُطبَّق في أي مكان. التحقق من"
+               " البلاغ ينتهي عند الكاشف: راقب عميل CSX حقيقي مقابل هذا التدقيق."));
+    }
+}
+
 static void DrawConfigTab()
 {
     if (!s_configsScanned) ScanConfigs();
@@ -2425,16 +2620,17 @@ void NrthUI_Build()
             const char *enSub;
             const char *arSub;
         };
-        static const NavDef kNavs[6] = {
+        static const NavDef kNavs[7] = {
             { "LUA", "Scripts",  "السكربتات",     "Executor & Hooks",   "منفذ لوا والأحداث"   },
             { "DMP", "Dumper",   "ساحب الملفات",  "Client Extractor",   "استخراج السكربتات"   },
             { "CHT", "Cheat",    "خصائص الغش",   "Player & Combat",    "اللاعب والقتال"      },
             { "VEH", "Vehicle",  "المركبات",      "Mods & Spawner",     "تعديل المركبات"      },
             { "SES", "Session",  "الجلسة والبقاء", "Analysis & Stay",    "التحليل والبقاء"     },
+            { "CSX", "CSX Audit", "تدقيق CSX",    "Spoofer Report Lab", "مختبر بلاغ spoofer"  },
             { "CFG", "Config",   "الإعدادات",     "Theme & Language",   "المظهر واللغة"       },
         };
 
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 7; ++i) {
             char hid[32];
             snprintf(hid, sizeof(hid), "nvx_top_%d", i);
             const char *title = (s_lang == 0) ? AR(kNavs[i].arTitle) : kNavs[i].enTitle;
@@ -2547,6 +2743,10 @@ void NrthUI_Build()
         } else if (s_topTab == 4) {
             ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
             DrawSessionTab();
+            ImGui::EndChild();
+        } else if (s_topTab == 5) {
+            ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);
+            DrawCsxTab();
             ImGui::EndChild();
         } else {
             ImGui::BeginChild("##nvx_content", ImVec2(0, 0), true);

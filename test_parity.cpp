@@ -14,6 +14,7 @@
 #include "nrth_config.h"
 #include "nrth_arabic.h"
 #include "nrth_assets.h"
+#include "nrth_csx.h"
 
 #ifdef NRTH_UI_HEADLESS
 /* harness-only hook implemented inside nrth_ui.cpp's UI region */
@@ -751,6 +752,97 @@ int main(void)
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
                   "session UI: feature state intact after Session frames");
+        }
+#endif /* NRTH_UI_HEADLESS */
+    }
+
+    /* 12. CSX AUDIT: spoofer-analysis constants + pure audit helpers */
+    {
+        /* 12a. signature scanner detects CSX artifacts in a synthetic buffer */
+        {
+            const char *synthetic =
+                "sample loader log: resetting MTA serial identity... "
+                "payload csxcheat.dll mapped; dropped csxprobe.exe; "
+                "beacon /api/heartbeat; req {\"type\":\"rename\",\"hwid\":\"\"}";
+            const uint32_t f = NrthCsx_ScanSignatures((const uint8_t *)synthetic,
+                                                      strlen(synthetic));
+            CHECK((f & (1u << 0)) && (f & (1u << 1)) && (f & (1u << 4)) && (f & (1u << 5)),
+                  "csx: scanner flags csxcheat.dll/csxprobe.exe/rename-JSON/reset-log");
+            CHECK(NrthCsx_ScanSignatures((const uint8_t *)"nothing here", 12) == 0,
+                  "csx: scanner reports zero on clean buffer");
+            CHECK(NrthCsx_ScanSignatures(NULL, 0) == 0, "csx: scanner NULL-safe");
+        }
+        /* 12b. encrypted-container magic from the real binary is detectable */
+        {
+            const uint8_t container[] = {
+                0x0E, 0x6F, 0xE8, 0x7E, 0x50, 0x74, 0x65, 0x61,
+                0x68, 0x74, 0x68, 0x21, 0xCD, 0xCF, 0x32, 0x36
+            };
+            CHECK((NrthCsx_ScanSignatures(container, sizeof(container)) & (1u << 2)) != 0,
+                  "csx: Ptea-hth RCDATA container magic flagged (blob 102/103 header)");
+        }
+        /* 12c. fingerprint JSON builder parity (audit-only shape) */
+        {
+            char js[512];
+            const size_t n = NrthCsx_BuildFingerprintJson("AABBCCDD", "LAB-PC", "tester",
+                                                          "1234ABCD", js, sizeof(js));
+            CHECK(n > 0 && strstr(js, "\"hwid\":\"AABBCCDD\"") &&
+                  strstr(js, "\"computer\":\"LAB-PC\"") &&
+                  strstr(js, "\"user\":\"tester\"") &&
+                  strstr(js, "\"disk\":\"1234ABCD\"") &&
+                  strstr(js, "DARKANARCHY-audit"),
+                  "csx: fingerprint JSON matches CSX shape (audit-labeled)");
+            CHECK(NrthCsx_BuildFingerprintJson("x", "y", "z", "w", NULL, 0) == 0,
+                  "csx: JSON builder NULL/0-safe");
+        }
+        /* 12d. dry-run spoof simulator: deterministic, distinct, pure */
+        {
+            char a[64], b[64], c[64];
+            NrthCsx_SimulateSpoofId("9f3b1c2a-44d5", 7, a, sizeof(a));
+            NrthCsx_SimulateSpoofId("9f3b1c2a-44d5", 7, b, sizeof(b));
+            NrthCsx_SimulateSpoofId("9f3b1c2a-44d5", 8, c, sizeof(c));
+            CHECK(a[0] && strcmp(a, b) == 0, "csx: simulator deterministic for (id,salt)");
+            CHECK(strcmp(a, c) != 0, "csx: simulator changes with salt");
+            CHECK(strcmp(a, "9f3b1c2a-44d5") != 0 && strncmp(a, "SIM-", 4) == 0,
+                  "csx: simulator output distinct and SIM-prefixed");
+            NrthCsx_SimulateSpoofId("", 1, c, sizeof(c));
+            CHECK(c[0] == '\0', "csx: simulator empty-safe");
+            NrthCsx_SimulateSpoofId("x", 1, NULL, 0);
+            CHECK(1, "csx: simulator NULL/0-safe");
+        }
+        /* 12e. headless render of the CSX Audit tab (AR default + EN) */
+#ifdef NRTH_UI_HEADLESS
+        {
+            ImGui::CreateContext();
+            ImGuiIO &io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(880.0f, 570.0f);
+            io.DeltaTime   = 1.0f / 60.0f;
+            io.IniFilename = NULL;
+            NrthUI_ApplyTheme();
+            NrthUI_InitFonts();
+            CHECK(io.Fonts->Build(), "csx UI: font atlas builds");
+
+            NrthUI_TestSetTab(5); /* CSX Audit */
+            NrthUI_TestSetLanguage(0);
+            ImGui::NewFrame();
+            NrthUI_RenderFrame(true);
+            ImGui::Render();
+            ImDrawData *dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "csx UI: Arabic CSX frame renders (>100 vtx)");
+            NrthUI_TestSetLanguage(1);
+            ImGui::NewFrame();
+            NrthUI_RenderFrame(true);
+            ImGui::Render();
+            dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "csx UI: English CSX frame renders (>100 vtx)");
+            NrthUI_TestSetLanguage(0);
+            NrthUI_TestSetTab(0);
+            ImGui::DestroyContext();
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "csx UI: feature state intact after CSX frames");
         }
 #endif /* NRTH_UI_HEADLESS */
     }
