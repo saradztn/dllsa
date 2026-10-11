@@ -12,8 +12,13 @@
 #include "nrth_audit_sigs.h"
 #include "nrth_codec.h"
 #include "nrth_config.h"
-#include "nrth_fonts.h"
-#include "nrth_logo.h"
+#include "nrth_arabic.h"
+#include "nrth_assets.h"
+
+#ifdef NRTH_UI_HEADLESS
+/* harness-only hook implemented inside nrth_ui.cpp's UI region */
+extern "C" void NrthUI_TestSetLanguage(int lang);
+#endif
 #include "nrth_hook.h"
 #include "nrth_ui.h"
 #include "imgui.h"
@@ -456,139 +461,170 @@ int main(void)
         if (fAud) fclose(fAud);
     }
 
-    /* 10. Verify DARKANARCHY bilingual fonts + Arabic shaping/BiDi engine */
+    /* 10. Verify the merged DARKANARCHY design: embedded assets, Arabic
+     * shaper/BiDi engine (nrth_arabic.h), shaper->font coverage closure, and
+     * headless full-UI frame renders (NRTH_UI_HEADLESS) */
     {
         /* 10a. Embedded TTF payloads are valid TrueType fonts */
-        CHECK(sizeof(kFontEnglishTTF) == 78604u &&
-              kFontEnglishTTF[0] == 0x00 && kFontEnglishTTF[1] == 0x01 &&
-              kFontEnglishTTF[2] == 0x00 && kFontEnglishTTF[3] == 0x00,
-              "nrth_fonts: kFontEnglishTTF (ChakraPetch-SemiBold.ttf, 78604 bytes) has TTF magic");
-        CHECK(sizeof(kFontArabicTTF) == 244616u &&
-              kFontArabicTTF[0] == 0x00 && kFontArabicTTF[1] == 0x01 &&
-              kFontArabicTTF[2] == 0x00 && kFontArabicTTF[3] == 0x00,
-              "nrth_fonts: kFontArabicTTF (IBMPlexSansArabic-SemiBold.ttf, 244616 bytes) has TTF magic");
+        CHECK(sizeof(kDarkAnarchyEnglishTtf) == 78604u &&
+              kDarkAnarchyEnglishTtf[0] == 0x00 && kDarkAnarchyEnglishTtf[1] == 0x01 &&
+              kDarkAnarchyEnglishTtf[2] == 0x00 && kDarkAnarchyEnglishTtf[3] == 0x00,
+              "nrth_assets: kDarkAnarchyEnglishTtf (78,604 B) has TTF magic");
+        CHECK(sizeof(kDarkAnarchyArabicTtf) == 58876u &&
+              kDarkAnarchyArabicTtf[0] == 0x00 && kDarkAnarchyArabicTtf[1] == 0x01 &&
+              kDarkAnarchyArabicTtf[2] == 0x00 && kDarkAnarchyArabicTtf[3] == 0x00,
+              "nrth_assets: kDarkAnarchyArabicTtf (58,876 B) has TTF magic");
 
-        /* 10b. Language switch round-trip */
-        NrthUI_SetLanguageArabic(true);
-        CHECK(NrthUI_IsLanguageArabic() == true, "NrthUI_SetLanguageArabic(true) round-trip");
-        NrthUI_SetLanguageArabic(false);
-        CHECK(NrthUI_IsLanguageArabic() == false, "NrthUI_SetLanguageArabic(false) round-trip");
-
-        /* 10c. Contextual shaping: "سلام" contains a mandatory LAM-ALEF ligature:
-         * [FEB3 FEFC FEE1] (seen initial + lam-alef final + meem isolated) */
+        /* 10b. QOI texture assets: magic + declared dimensions */
         {
-            uint32_t in[4], shaped[8] = {0};
-            size_t n = 0;
-            in[n++] = 0x0633; in[n++] = 0x0644; in[n++] = 0x0627; in[n++] = 0x0645;
-            size_t m = NrthShape_ArabicCodepoints(in, n, shaped, 8);
-            CHECK(m == 3 && shaped[0] == 0xFEB3 && shaped[1] == 0xFEFC &&
-                  shaped[2] == 0xFEE1,
-                  "Arabic shaper: سلام -> FEB3 FEFC FEE1 (seen initial + lam-alef final + meem isolated)");
-
-            /* Lam-Alef ligature: "لا" -> FEFB (isolated) */
-            uint32_t la[2] = { 0x0644, 0x0627 };
-            uint32_t lig[4] = {0};
-            m = NrthShape_ArabicCodepoints(la, 2, lig, 4);
-            CHECK(m == 1 && lig[0] == 0xFEFB,
-                  "Arabic shaper: لا -> FEFB (lam-alef isolated ligature)");
-
-            /* Connected lam-alef: "ملا" -> meem initial FEE3 + lam-alef final FEFC */
-            uint32_t mla[3] = { 0x0645, 0x0644, 0x0627 };
-            uint32_t out3[4] = {0};
-            m = NrthShape_ArabicCodepoints(mla, 3, out3, 4);
-            CHECK(m == 2 && out3[0] == 0xFEE3 && out3[1] == 0xFEFC,
-                  "Arabic shaper: ملا -> FEE3 FEFC (meem initial + lam-alef final)");
-
-            /* Right-joining alef never connects forward: "أب" ->
-             * alef-hamza isolated FE83 + beh isolated FE8F */
-            uint32_t ab[2] = { 0x0623, 0x0628 };
-            uint32_t out4[4] = {0};
-            m = NrthShape_ArabicCodepoints(ab, 2, out4, 4);
-            CHECK(m == 2 && out4[0] == 0xFE83 && out4[1] == 0xFE8F,
-                  "Arabic shaper: أب -> FE83 FE8F (alef right-joining, beh isolated)");
-
-            /* Dual-joining chain: "بب" -> beh initial FE91 + beh final FE90 */
-            uint32_t bb[2] = { 0x0628, 0x0628 };
-            uint32_t out5[4] = {0};
-            m = NrthShape_ArabicCodepoints(bb, 2, out5, 4);
-            CHECK(m == 2 && out5[0] == 0xFE91 && out5[1] == 0xFE90,
-                  "Arabic shaper: بب -> FE91 FE90 (beh initial + beh final)");
+            auto qoiDims = [](const unsigned char *d, size_t sz, uint32_t *w, uint32_t *h) {
+                if (sz < 22 || d[0] != 'q' || d[1] != 'o' || d[2] != 'i' || d[3] != 'f')
+                    return false;
+                *w = ((uint32_t)d[4] << 24) | ((uint32_t)d[5] << 16) | ((uint32_t)d[6] << 8) | d[7];
+                *h = ((uint32_t)d[8] << 24) | ((uint32_t)d[9] << 16) | ((uint32_t)d[10] << 8) | d[11];
+                return d[12] == 3 || d[12] == 4; /* channels */
+            };
+            uint32_t w = 0, h = 0;
+            CHECK(qoiDims(kDarkAnarchyLogoQoi, sizeof(kDarkAnarchyLogoQoi), &w, &h) &&
+                  w == (uint32_t)DARKANARCHY_LOGO_WIDTH && h == (uint32_t)DARKANARCHY_LOGO_HEIGHT,
+                  "nrth_assets: logo QOI valid, 320x180 RGB");
+            CHECK(qoiDims(kDarkAnarchyBgQoi, sizeof(kDarkAnarchyBgQoi), &w, &h) &&
+                  w == (uint32_t)DARKANARCHY_BG_WIDTH && h == (uint32_t)DARKANARCHY_BG_HEIGHT,
+                  "nrth_assets: background QOI valid, 480x270 RGB");
         }
 
-        /* 10d. Public shaping API: UTF-8 -> shaped + visually reordered UTF-8.
-         * "سلام" shaped [FEB3 FEFC FEE1], visual (reversed) [FEE1 FEFC FEB3]
-         * in UTF-8: "\xEF\xBB\xA1\xEF\xBB\xBC\xEF\xBA\xB3" */
+        /* 10c. Contextual shaping + lam-alef ligatures + BiDi visual order via
+         * Nrth_ShapeArabicUTF8 (expected outputs derived from the standard
+         * Arabic Presentation Forms-B algorithm, verified independently) */
         {
-            char out[128];
-            const char *got = NrthUI_ShapeArabicText("\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85", out, sizeof(out));
-            const char *want = "\xEF\xBB\xA1\xEF\xBB\xBC\xEF\xBA\xB3";
-            CHECK(got == out && strcmp(out, want) == 0,
-                  "NrthUI_ShapeArabicText: سلام -> visual UTF-8 (FEE1 FEFC FEB3)");
-        }
-
-        /* 10e. BiDi visual reorder (LTR base): Arabic run is reversed IN PLACE,
-         * Latin run stays. Logical [شجرة abc] -> visual [ةرجش abc]. */
-        {
-            uint32_t in[7], visual[8] = {0};
-            /* شجرة = 0634 062C 0631 0629 */
-            in[0] = 0x0634; in[1] = 0x062C; in[2] = 0x0631; in[3] = 0x0629;
-            in[4] = 'a';    in[5] = 'b';    in[6] = 'c';
-            size_t v = NrthBidi_ReorderVisual(in, 7, visual, 8);
-            CHECK(v == 7 && visual[0] == 0x0629 && visual[1] == 0x0631 &&
-                  visual[2] == 0x062C && visual[3] == 0x0634 &&
-                  visual[4] == 'a' && visual[5] == 'b' && visual[6] == 'c',
-                  "BiDi reorder: [شجرة abc] -> visual [reversed Arabic run][abc]");
-        }
-
-        /* 10f. ASCII-only strings pass through untouched */
-        {
-            char out[64];
-            NrthUI_ShapeArabicText("DARKANARCHY 123", out, sizeof(out));
-            CHECK(strcmp(out, "DARKANARCHY 123") == 0,
-                  "NrthUI_ShapeArabicText: pure ASCII passes through unchanged");
-        }
-
-        /* 10g. Feature label translation table has an Arabic entry for every feature */
-        {
-            NrthUI_SetLanguageArabic(false);
-            /* FeatureTr is internal; verify indirectly through public state:
-             * toggling language must not corrupt feature state */
-            NrthUI_SyncFeaturesToState();
-            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
-                  "Feature state intact after language toggles");
-        }
-
-        /* 10h. Embedded DARKANARCHY logo (nrth_logo.h) + texture hook */
-        {
-            CHECK(kLogoWidth == 128 && kLogoHeight == 128 &&
-                  sizeof(kLogoPixelsRGBA) == (size_t)kLogoWidth * (size_t)kLogoHeight * 4u,
-                  "logo: embedded RGBA buffer is 128x128x4");
-            /* dark icon: mean brightness below 64, with a red-dominant symbol */
-            {
-                uint64_t sum = 0, red = 0;
-                const size_t npx = (size_t)kLogoWidth * kLogoHeight;
-                for (size_t i = 0; i < npx; ++i) {
-                    const uint8_t r = kLogoPixelsRGBA[i * 4 + 0];
-                    const uint8_t g = kLogoPixelsRGBA[i * 4 + 1];
-                    const uint8_t b = kLogoPixelsRGBA[i * 4 + 2];
-                    sum += (uint64_t)(r + g + b) / 3u;
-                    if (r > 90 && r > g * 3 / 2 && r > b * 3 / 2) ++red;
+            auto utf8Of = [](std::initializer_list<uint32_t> cps) {
+                std::string s;
+                for (uint32_t cp : cps) {
+                    if (cp < 0x80) s += (char)cp;
+                    else if (cp < 0x800) { s += (char)(0xC0 | (cp >> 6)); s += (char)(0x80 | (cp & 0x3F)); }
+                    else { s += (char)(0xE0 | (cp >> 12)); s += (char)(0x80 | ((cp >> 6) & 0x3F)); s += (char)(0x80 | (cp & 0x3F)); }
                 }
-                CHECK(sum / npx < 64, "logo: dark coal background (mean < 64)");
-                CHECK(red > npx / 20, "logo: red anarchy symbol present (>5% pixels)");
-            }
-            static int fakeTex;
-            NrthUI_SetLogoTexture(&fakeTex);
-            CHECK(NrthUI_HasLogoTexture(), "logo: SetLogoTexture/HasLogoTexture round-trip");
-            NrthUI_SetLogoTexture(NULL);
-            CHECK(!NrthUI_HasLogoTexture(), "logo: NULL falls back to vector logo");
-            NrthUI_SyncFeaturesToState();
-            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
-                  "Feature state intact after logo texture set/clear");
+                return s;
+            };
+            CHECK(Nrth_ShapeArabicUTF8("\xD8\xB3\xD9\x84\xD8\xA7\xD9\x85") == utf8Of({0xFEE1, 0xFEFC, 0xFEB3}),
+                  "shaper: salam -> visual FEE1 FEFC FEB3 (lam-alef + seen initial)");
+            CHECK(Nrth_ShapeArabicUTF8("\xD9\x84\xD8\xA7") == utf8Of({0xFEFB}),
+                  "shaper: lam-alef isolated -> FEFB");
+            CHECK(Nrth_ShapeArabicUTF8("\xD9\x85\xD9\x84\xD8\xA7") == utf8Of({0xFEFC, 0xFEE3}),
+                  "shaper: meem+lam-alef -> visual FEFC FEE3");
+            CHECK(Nrth_ShapeArabicUTF8("\xD8\xA3\xD8\xA8") == utf8Of({0xFE8F, 0xFE83}),
+                  "shaper: alef-hamza+beh (right-joining) -> visual FE8F FE83");
+            CHECK(Nrth_ShapeArabicUTF8("\xD8\xA8\xD8\xA8") == utf8Of({0xFE90, 0xFE91}),
+                  "shaper: beh+beh -> visual FE90 FE91 (initial + final)");
+            CHECK(Nrth_ShapeArabicUTF8("DARKANARCHY 123") == "DARKANARCHY 123",
+                  "shaper: pure ASCII passes through unchanged");
+            CHECK(Nrth_ShapeArabicUTF8("\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7##tab1") ==
+                                      utf8Of({0xFE8E, 0xFE92, 0xFEA3, 0xFEAE, 0xFEE3}) + "##tab1",
+                  "shaper: ImGui ##id suffix preserved untouched");
+            CHECK(Nrth_ShapeArabicUTF8("\xD8\xB4\xD8\xAC\xD8\xB1\xD8\xA9 abc") ==
+                                      "abc " + utf8Of({0xFE93, 0xFEAE, 0xFEA0, 0xFEB7}),
+                  "shaper/BiDi: mixed line -> Latin run first, Arabic run reversed");
         }
 
-        /* 10i. Headless full-UI frame render (EN + AR) with real font atlas
-         * (requires -DNRTH_UI_HEADLESS so the real ImGui UI is compiled in) */
+        /* 10d. Coverage closure: EVERY presentation form the shaper can emit
+         * exists in the embedded Arabic font cmap (format 4 + 12 parser) */
+        {
+            /* --- minimal TTF cmap parser --- */
+            auto rd16 = [](const unsigned char *d, size_t o) -> int {
+                return (int)((unsigned)d[o] << 8 | d[o + 1]); };
+            auto ru16 = [](const unsigned char *d, size_t o) -> unsigned {
+                return (unsigned)d[o] << 8 | d[o + 1]; };
+            auto ru32 = [](const unsigned char *d, size_t o) -> uint32_t {
+                return ((uint32_t)d[o] << 24) | ((uint32_t)d[o+1] << 16) |
+                       ((uint32_t)d[o+2] << 8) | d[o+3]; };
+            const unsigned char *d = kDarkAnarchyArabicTtf;
+            const size_t dlen = sizeof(kDarkAnarchyArabicTtf);
+            bool hasAll = dlen > 1024;
+            if (hasAll) {
+                size_t cmapOff = 0;
+                unsigned nTables = ru16(d, 4);
+                for (unsigned i = 0; i < nTables; ++i) {
+                    if (memcmp(d + 12 + i * 16, "cmap", 4) == 0) {
+                        cmapOff = ru32(d, 12 + i * 16 + 8);
+                        break;
+                    }
+                }
+                hasAll = cmapOff != 0;
+                if (hasAll) {
+                    unsigned nSub = ru16(d, cmapOff + 2);
+                    size_t sub = 0, sub12 = 0;
+                    for (unsigned i = 0; i < nSub; ++i) {
+                        /* encoding record: pid u16, eid u16, offset u32 (+4) */
+                        size_t toff = cmapOff + ru32(d, cmapOff + 4 + i * 8 + 4);
+                        unsigned fmt = ru16(d, toff);
+                        if (fmt == 4 && !sub) sub = toff;
+                        if (fmt == 12) sub12 = toff;
+                    }
+                    if (!sub && !sub12) hasAll = false;
+                    auto inFont = [&](uint32_t c) -> bool {
+                        if (sub12) {
+                            uint32_t ng = ru32(d, sub12 + 12);
+                            for (uint32_t g = 0; g < ng; ++g) {
+                                uint32_t s = ru32(d, sub12 + 16 + g * 12);
+                                uint32_t e = ru32(d, sub12 + 16 + g * 12 + 4);
+                                if (c >= s && c <= e) return true;
+                            }
+                            return false;
+                        }
+                        /* format 4 with full glyph-id lookup (not just ranges) */
+                        unsigned segX2 = ru16(d, sub + 6);
+                        unsigned segs = segX2 / 2;
+                        size_t endsO   = sub + 14;
+                        size_t startsO = endsO + segX2 + 2;
+                        size_t deltaO  = startsO + segX2;
+                        size_t rosO    = deltaO + segX2;
+                        for (unsigned sgi = 0; sgi < segs; ++sgi) {
+                            unsigned e = ru16(d, endsO + sgi * 2);
+                            unsigned s = ru16(d, startsO + sgi * 2);
+                            if (c < s || c > e) continue;
+                            int      delta = (int)(short)ru16(d, deltaO + sgi * 2);
+                            unsigned ro    = ru16(d, rosO + sgi * 2);
+                            unsigned glyph;
+                            if (ro == 0) {
+                                glyph = (unsigned)(c + delta) & 0xFFFFu;
+                            } else {
+                                size_t addr = rosO + sgi * 2 + ro + (c - s) * 2;
+                                if (addr + 1 >= dlen) return false;
+                                glyph = ru16(d, addr);
+                                glyph = glyph ? ((unsigned)((int)glyph + delta) & 0xFFFFu) : 0u;
+                            }
+                            return glyph != 0;
+                        }
+                        return false;
+                    };
+                    /* every isolated/initial/medial/final form of all 37 letters */
+                    for (const NrthArabicLetterMap &m : kNrthArabicLetters) {
+                        const uint32_t forms[4] = { m.isolated, m.finalForm, m.initial, m.medial };
+                        for (uint32_t f : forms) {
+                            if (!inFont(f)) { hasAll = false; break; }
+                        }
+                        if (!hasAll) break;
+                    }
+                    /* lam-alef ligatures FEF5..FEFC (both joined variants) */
+                    if (hasAll) {
+                        for (uint32_t f = 0xFEF5; f <= 0xFEFC; ++f)
+                            if (!inFont(f)) { hasAll = false; break; }
+                    }
+                }
+            }
+            CHECK(hasAll,
+                  "coverage: Arabic font cmap contains every form the shaper emits (all letter forms + FEF5..FEFC)");
+        }
+
+        /* 10e. Feature state untouched by shaping calls */
+        {
+            (void)Nrth_ShapeArabicUTF8("\xD8\xAA\xD8\xB3\xD8\xAA \xD8\xA7\xD9\x84\xD9\x84\xD8\xBA\xD8\xA9");
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "Feature state intact after shaper calls");
+        }
+
+        /* 10f. Headless full-UI frame render (AR default + EN via test hook) */
 #ifdef NRTH_UI_HEADLESS
         {
             ImGui::CreateContext();
@@ -597,74 +633,45 @@ int main(void)
             io.DeltaTime   = 1.0f / 60.0f;
             io.IniFilename = NULL;
 
-            static const ImWchar kEnRanges[] = { 0x0020, 0x00FF, 0 };
-            static const ImWchar kArRanges[] = {
-                0x0020, 0x00FF, 0x0600, 0x06FF, 0x0750, 0x077F,
-                0x08A0, 0x08FF, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0
-            };
-            ImFontConfig fc;
-            fc.FontDataOwnedByAtlas = false;
-            fc.OversampleH = 2;
-            ImFont *pEn = io.Fonts->AddFontFromMemoryTTF(
-                (void *)(uintptr_t)kFontEnglishTTF, (int)sizeof(kFontEnglishTTF), 17.0f, &fc, kEnRanges);
-            ImFont *pAr = io.Fonts->AddFontFromMemoryTTF(
-                (void *)(uintptr_t)kFontArabicTTF, (int)sizeof(kFontArabicTTF), 17.0f, &fc, kArRanges);
-            CHECK(pEn && pAr, "headless UI: both TTFs load from memory into atlas");
-            CHECK(io.Fonts->Build(), "headless UI: font atlas builds");
-            /* this ImGui version exposes per-source cmap coverage via
-             * ImFont::IsGlyphInFont (FindGlyph lives on ImFontBaked) */
-            #define UI_HAS_GLYPH(f, c) ((f) && (f)->IsGlyphInFont((ImWchar)(c)))
-            CHECK(UI_HAS_GLYPH(pEn, 'D'),
-                  "headless UI: English glyphs in font (D)");
-            CHECK(UI_HAS_GLYPH(pAr, 0xFEB3) && UI_HAS_GLYPH(pAr, 0xFEFC) && UI_HAS_GLYPH(pAr, 0x0633),
-                  "headless UI: Arabic glyphs in font (FEB3/FEFC/0633)");
-            #undef UI_HAS_GLYPH
-
-            NrthUI_SetFonts(pEn, pAr);
-            static int s_fakeLogoTex;
-            NrthUI_SetLogoTexture(&s_fakeLogoTex);
-
-            auto CountLogoCmds = [](ImDrawData *dd, void *tex) -> int {
-                int n = 0;
-                if (!dd || !dd->Valid) return 0;
-                for (int li = 0; li < dd->CmdListsCount; ++li) {
-                    const ImDrawList *dl = dd->CmdLists[li];
-                    for (int ci = 0; ci < dl->CmdBuffer.Size; ++ci) {
-                        const ImDrawCmd &c = dl->CmdBuffer[ci];
-                        /* headless-safe: font cmds carry _TexData, the logo cmd
-                         * carries a raw user _TexID — never call GetTexID() */
-                        if (c.TexRef._TexData == NULL &&
-                            c.TexRef._TexID == (ImTextureID)(uintptr_t)tex) ++n;
-                    }
+            NrthUI_ApplyTheme();
+            NrthUI_InitFonts();
+            CHECK(io.Fonts->Fonts.size() >= 2 && io.Fonts->Build(),
+                  "headless UI: font atlas builds with the embedded fonts");
+            {
+                bool arCov = false, enCov = false;
+                for (ImFont *f : io.Fonts->Fonts) {
+                    if (!f) continue;
+                    if (f->IsGlyphInFont((ImWchar)0xFEB3) && f->IsGlyphInFont((ImWchar)0xFEFC)) arCov = true;
+                    if (f->IsGlyphInFont((ImWchar)'D') && f->IsGlyphInFont((ImWchar)'3')) enCov = true;
                 }
-                return n;
-            };
+                CHECK(arCov, "headless UI: a baked font covers Arabic forms (FEB3/FEFC)");
+                CHECK(enCov, "headless UI: a baked font covers Latin ('D'/'3')");
+            }
 
-            /* English frame */
-            NrthUI_SetLanguageArabic(false);
+            /* Arabic frame (s_lang == 0 is the shipped default) */
+            NrthUI_TestSetLanguage(0);
             ImGui::NewFrame();
-            NrthUI_Build();
+            NrthUI_RenderFrame(true);
             ImGui::Render();
             ImDrawData *dd = ImGui::GetDrawData();
             CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
-                  "headless UI: EN frame produces draw data (>100 vtx)");
-            CHECK(CountLogoCmds(dd, &s_fakeLogoTex) >= 1,
-                  "headless UI: logo image draw command present (EN)");
+                  "headless UI: Arabic frame produces draw data (>100 vtx)");
 
-            /* Arabic frame (same live UI object, language toggled) */
-            NrthUI_SetLanguageArabic(true);
+            /* English frame through the same live UI object */
+            NrthUI_TestSetLanguage(1);
             ImGui::NewFrame();
-            NrthUI_Build();
+            NrthUI_RenderFrame(true);
             ImGui::Render();
             dd = ImGui::GetDrawData();
             CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
-                  "headless UI: AR frame produces draw data (>100 vtx)");
-            CHECK(CountLogoCmds(dd, &s_fakeLogoTex) >= 1,
-                  "headless UI: logo image draw command present (AR)");
+                  "headless UI: English frame produces draw data (>100 vtx)");
+            NrthUI_TestSetLanguage(0);
 
-            NrthUI_SetLanguageArabic(false);
-            NrthUI_SetLogoTexture(NULL);
-            NrthUI_SetFonts(NULL, NULL);
+            /* device-texture lifecycle must be NULL-safe headless */
+            NrthUI_InitTextures(NULL);
+            NrthUI_ReleaseTextures();
+            CHECK(true, "headless UI: InitTextures(NULL)/ReleaseTextures no-crash");
+
             ImGui::DestroyContext();
             NrthUI_SyncFeaturesToState();
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
