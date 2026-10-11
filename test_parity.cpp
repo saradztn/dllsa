@@ -385,6 +385,15 @@ int main(void)
             int32_t nHid = NrthFindHiddenSignatures(dllBuf, dllSz, 20, hidText, sizeof(hidText), hidVas, 32);
             CHECK(nHid == 20, "bin/NRTH.dll: NrthFindHiddenSignatures recovers all 20 hidden signatures from built DLL");
 
+            /* Verify NVXHookProc export RVA in bin/NRTH.dll matches original NRTH.dll (0x0000B9E0) */
+            uint32_t e_lfanew = *(const uint32_t *)(dllBuf + 0x3C);
+            uint32_t expRva   = *(const uint32_t *)(dllBuf + e_lfanew + 0x78);
+            const uint8_t *expPtr = NrthPeRvaToPtr(&peDll, expRva, 0x28);
+            uint32_t eatRva   = expPtr ? *(const uint32_t *)(expPtr + 0x1C) : 0;
+            const uint8_t *eatPtr = eatRva ? NrthPeRvaToPtr(&peDll, eatRva, 4) : NULL;
+            uint32_t hookProcRva = eatPtr ? *(const uint32_t *)eatPtr : 0;
+            CHECK(hookProcRva == 0x0000B9E0u, "bin/NRTH.dll: Export NVXHookProc at exact RVA 0x0000B9E0 (matches original NRTH.dll)");
+
             free(dllBuf);
             free(exeBuf);
         }

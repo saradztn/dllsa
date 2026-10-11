@@ -42,7 +42,10 @@ done
 echo "[*] Linking bin/nvx.dll and publishing bin/NRTH.dll..."
 "$ZIG" c++ -target x86-windows-gnu -shared -O2 -s \
     -Wl,--image-base,0x10000000 -Wl,--subsystem,console \
-    build_obj/*.o nrth_dll.def \
+    build_obj/nrth_hook.o build_obj/nrth_config.o build_obj/nrth_ui.o \
+    build_obj/buffer.o build_obj/hook.o build_obj/trampoline.o build_obj/hde32.o \
+    build_obj/imgui*.o build_obj/lua_*.o \
+    nrth_dll.def \
     -ld3d9 -luser32 -lgdi32 -ladvapi32 -lpsapi -ldwmapi \
     -o bin/nvx.dll
 cp bin/nvx.dll bin/NRTH.dll
