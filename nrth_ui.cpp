@@ -27,7 +27,7 @@
 #include "nrth_config.h"
 #include "nrth_hook.h"
 #include "nrth_ui.h"
-#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+#if (defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)) || defined(NRTH_UI_HEADLESS)
 #include "nrth_fonts.h"
 #include "nrth_vehicle_names.inc"
 #endif
@@ -738,9 +738,51 @@ extern "C" bool NrthUI_ExecuteLuaViaBridge(const char *code, size_t len, int vmM
 /* ===========================================================================
  * Full Dear ImGui + Embedded Lua 5.4.6 UI (Windows build)
  * =========================================================================== */
-#if defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)
+#if (defined(_WIN32) && !defined(NRTH_HEADLESS_TEST)) || defined(NRTH_UI_HEADLESS)
 
 #include "imgui.h"
+
+#ifndef _WIN32
+/* NRTH_UI_HEADLESS (Linux verification harness): minimal Win32 shims so the
+ * real ImGui UI compiles and runs headless. Compiled out on Windows. */
+#include <time.h>
+#include <math.h>
+typedef unsigned long long ULONGLONG;
+typedef unsigned long       DWORD_;
+typedef void               *HANDLE;
+#ifndef INVALID_HANDLE_VALUE
+#define INVALID_HANDLE_VALUE ((HANDLE)(long long)-1)
+#endif
+#define FILE_ATTRIBUTE_DIRECTORY 0x00000010u
+#define TRUE  1
+#define FALSE 0
+#ifndef VK_LBUTTON
+#define VK_LBUTTON 0x01
+#define VK_RBUTTON 0x02
+#define VK_ESCAPE  0x1B
+#endif
+struct WIN32_FIND_DATAA {
+    DWORD_ dwFileAttributes;
+    char   cFileName[260];
+};
+static unsigned short GetAsyncKeyState(int /*vk*/) { return 0; }
+static ULONGLONG GetTickCount64(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (ULONGLONG)ts.tv_sec * 1000ull + (ULONGLONG)ts.tv_nsec / 1000000ull;
+}
+static HANDLE FindFirstFileA(const char * /*sz*/, WIN32_FIND_DATAA *fd)
+{
+    if (fd) { fd->dwFileAttributes = 0; fd->cFileName[0] = '\0'; }
+    return INVALID_HANDLE_VALUE; /* no files visible in the headless harness */
+}
+static int FindNextFileA(HANDLE /*h*/, WIN32_FIND_DATAA * /*fd*/) { return FALSE; }
+static int FindClose(HANDLE /*h*/) { return TRUE; }
+static int CreateDirectoryA(const char * /*path*/, void * /*sa*/) { return FALSE; }
+static int DeleteFileA(const char * /*path*/) { return FALSE; }
+#endif /* !_WIN32 */
+
 
 extern "C" {
 #include "lua.h"

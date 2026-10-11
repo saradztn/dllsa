@@ -16,6 +16,7 @@
 #include "nrth_logo.h"
 #include "nrth_hook.h"
 #include "nrth_ui.h"
+#include "imgui.h"
 
 static int g_passed = 0;
 static int g_failed = 0;
@@ -129,6 +130,11 @@ static int MockLuaPcall(void *L, int nargs, int nresults, int errfunc)
 int main(void)
 {
     printf("=== NRTH Parity & Mechanism Verification Suite ===\n");
+#ifdef NRTH_UI_HEADLESS
+    printf("  mode: NRTH_UI_HEADLESS (full ImGui UI compiled, frame tests active)\n");
+#else
+    printf("  mode: core-only (UI stubbed; build with -DNRTH_UI_HEADLESS for UI frame tests)\n");
+#endif
 
     /* 1. Built-in nrth_audit self-test */
     char auditReport[4096] = {0};
@@ -580,6 +586,91 @@ int main(void)
             CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
                   "Feature state intact after logo texture set/clear");
         }
+
+        /* 10i. Headless full-UI frame render (EN + AR) with real font atlas
+         * (requires -DNRTH_UI_HEADLESS so the real ImGui UI is compiled in) */
+#ifdef NRTH_UI_HEADLESS
+        {
+            ImGui::CreateContext();
+            ImGuiIO &io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(880.0f, 570.0f);
+            io.DeltaTime   = 1.0f / 60.0f;
+            io.IniFilename = NULL;
+
+            static const ImWchar kEnRanges[] = { 0x0020, 0x00FF, 0 };
+            static const ImWchar kArRanges[] = {
+                0x0020, 0x00FF, 0x0600, 0x06FF, 0x0750, 0x077F,
+                0x08A0, 0x08FF, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0
+            };
+            ImFontConfig fc;
+            fc.FontDataOwnedByAtlas = false;
+            fc.OversampleH = 2;
+            ImFont *pEn = io.Fonts->AddFontFromMemoryTTF(
+                (void *)(uintptr_t)kFontEnglishTTF, (int)sizeof(kFontEnglishTTF), 17.0f, &fc, kEnRanges);
+            ImFont *pAr = io.Fonts->AddFontFromMemoryTTF(
+                (void *)(uintptr_t)kFontArabicTTF, (int)sizeof(kFontArabicTTF), 17.0f, &fc, kArRanges);
+            CHECK(pEn && pAr, "headless UI: both TTFs load from memory into atlas");
+            CHECK(io.Fonts->Build(), "headless UI: font atlas builds");
+            /* this ImGui version exposes per-source cmap coverage via
+             * ImFont::IsGlyphInFont (FindGlyph lives on ImFontBaked) */
+            #define UI_HAS_GLYPH(f, c) ((f) && (f)->IsGlyphInFont((ImWchar)(c)))
+            CHECK(UI_HAS_GLYPH(pEn, 'D'),
+                  "headless UI: English glyphs in font (D)");
+            CHECK(UI_HAS_GLYPH(pAr, 0xFEB3) && UI_HAS_GLYPH(pAr, 0xFEFC) && UI_HAS_GLYPH(pAr, 0x0633),
+                  "headless UI: Arabic glyphs in font (FEB3/FEFC/0633)");
+            #undef UI_HAS_GLYPH
+
+            NrthUI_SetFonts(pEn, pAr);
+            static int s_fakeLogoTex;
+            NrthUI_SetLogoTexture(&s_fakeLogoTex);
+
+            auto CountLogoCmds = [](ImDrawData *dd, void *tex) -> int {
+                int n = 0;
+                if (!dd || !dd->Valid) return 0;
+                for (int li = 0; li < dd->CmdListsCount; ++li) {
+                    const ImDrawList *dl = dd->CmdLists[li];
+                    for (int ci = 0; ci < dl->CmdBuffer.Size; ++ci) {
+                        const ImDrawCmd &c = dl->CmdBuffer[ci];
+                        /* headless-safe: font cmds carry _TexData, the logo cmd
+                         * carries a raw user _TexID — never call GetTexID() */
+                        if (c.TexRef._TexData == NULL &&
+                            c.TexRef._TexID == (ImTextureID)(uintptr_t)tex) ++n;
+                    }
+                }
+                return n;
+            };
+
+            /* English frame */
+            NrthUI_SetLanguageArabic(false);
+            ImGui::NewFrame();
+            NrthUI_Build();
+            ImGui::Render();
+            ImDrawData *dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "headless UI: EN frame produces draw data (>100 vtx)");
+            CHECK(CountLogoCmds(dd, &s_fakeLogoTex) >= 1,
+                  "headless UI: logo image draw command present (EN)");
+
+            /* Arabic frame (same live UI object, language toggled) */
+            NrthUI_SetLanguageArabic(true);
+            ImGui::NewFrame();
+            NrthUI_Build();
+            ImGui::Render();
+            dd = ImGui::GetDrawData();
+            CHECK(dd && dd->Valid && dd->TotalVtxCount > 100,
+                  "headless UI: AR frame produces draw data (>100 vtx)");
+            CHECK(CountLogoCmds(dd, &s_fakeLogoTex) >= 1,
+                  "headless UI: logo image draw command present (AR)");
+
+            NrthUI_SetLanguageArabic(false);
+            NrthUI_SetLogoTexture(NULL);
+            NrthUI_SetFonts(NULL, NULL);
+            ImGui::DestroyContext();
+            NrthUI_SyncFeaturesToState();
+            CHECK(Nrth_GetPlayerHealthSync()->bGodMode == 0,
+                  "Feature state intact after headless UI frames");
+        }
+#endif /* NRTH_UI_HEADLESS */
     }
 
     printf("---------------------------------------------------\n");
